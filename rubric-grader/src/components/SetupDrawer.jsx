@@ -13,7 +13,7 @@ import RubricSelector from './RubricSelector';
 import CSVImport from './CSVImport';
 
 const SetupDrawer = () => {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(true);
 
   return (
     <Box sx={{ mb: 3 }}>
