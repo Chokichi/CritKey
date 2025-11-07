@@ -1,0 +1,24 @@
+{
+  "name": "critkey",
+  "version": "1.0.0",
+  "description": "CritKey - Fast rubric grading app with keyboard shortcuts",
+  "private": true,
+  "scripts": {
+    "build": "cd rubric-grader && npm ci && npm run build",
+    "dev": "cd rubric-grader && npm run dev",
+    "preview": "cd rubric-grader && npm run preview"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Chokichi/CritKey.git"
+  },
+  "keywords": [
+    "rubric",
+    "grading",
+    "canvas",
+    "education"
+  ],
+  "author": "",
+  "license": "MIT"
+}
+
