@@ -17,6 +17,7 @@ import {
   Divider,
   IconButton,
   ButtonGroup,
+  Snackbar,
 } from '@mui/material';
 import {
   ContentCopy as CopyIcon,
@@ -36,6 +37,7 @@ const FeedbackGenerator = () => {
   const [feedbackText, setFeedbackText] = useState('');
   const [historyMenuAnchor, setHistoryMenuAnchor] = useState(null);
   const [feedbackHistory, setFeedbackHistory] = useState([]);
+  const [snackbarOpen, setSnackbarOpen] = useState(false);
   
   const { currentRubric, getTotalPoints, resetGrading } = useRubricStore();
 
@@ -43,30 +45,37 @@ const FeedbackGenerator = () => {
     setFeedbackHistory(getFeedbackHistory());
   };
 
-  const handleGenerate = async () => {
+  const handleGenerate = async ({ showModal }) => {
     if (!currentRubric) return;
 
     const text = generateFeedbackText(currentRubric);
     setFeedbackText(text);
-    setOpen(true);
     setCopied(false);
-    
-    // Auto-copy to clipboard
+
+    if (showModal) {
+      setOpen(true);
+    }
+
     try {
       await navigator.clipboard.writeText(text);
       setCopied(true);
+      if (!showModal) {
+        setSnackbarOpen(true);
+      }
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {
       console.error('Failed to copy:', err);
     }
-    
+
     const label = currentRubric.feedbackLabel?.trim();
     const historyLabel = label || currentRubric.name;
 
-    // Save to history
     saveFeedbackToHistory(text, currentRubric.name, historyLabel);
     loadFeedbackHistory();
   };
+
+  const handleGenerateWithModal = () => handleGenerate({ showModal: true });
+  const handleGenerateHotkey = () => handleGenerate({ showModal: false });
 
   const handleCopy = async () => {
     try {
@@ -116,7 +125,7 @@ const FeedbackGenerator = () => {
   // Ctrl/Cmd + Enter to generate feedback
   useHotkeys('ctrl+enter, meta+enter', () => {
     if (currentRubric && !open) {
-      handleGenerate();
+      handleGenerateHotkey();
     }
   }, [currentRubric, open]);
 
@@ -149,7 +158,7 @@ const FeedbackGenerator = () => {
           <Stack direction="row" spacing={1}>
             <ButtonGroup variant="contained" size="large" sx={{ flex: 1 }}>
               <Button
-                onClick={handleGenerate}
+                onClick={handleGenerateWithModal}
                 disabled={earned === 0 && possible === 0}
                 sx={{ flex: 1 }}
               >
@@ -293,6 +302,12 @@ const FeedbackGenerator = () => {
           </Button>
         </DialogActions>
       </Dialog>
+      <Snackbar
+        open={snackbarOpen}
+        autoHideDuration={2500}
+        onClose={() => setSnackbarOpen(false)}
+        message="Feedback copied to clipboard"
+      />
     </>
   );
 };

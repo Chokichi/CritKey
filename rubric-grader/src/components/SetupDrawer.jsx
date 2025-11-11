@@ -23,6 +23,7 @@ import CourseSelector from './CourseSelector';
 import RubricSelector from './RubricSelector';
 import CSVImport from './CSVImport';
 import { generateCanvasCSV } from '../utils/csvParser';
+import JSZip from 'jszip';
 
 const SetupDrawer = () => {
   const [expanded, setExpanded] = useState(true);
@@ -52,7 +53,7 @@ const SetupDrawer = () => {
     setDownloadOpen(true);
   };
 
-  const handleDownload = () => {
+  const handleDownload = async () => {
     if (selectedRubricNames.length === 0) return;
 
     const rubricsToExport = sortedRubrics.filter((rubric) =>
@@ -60,9 +61,6 @@ const SetupDrawer = () => {
     );
 
     if (rubricsToExport.length === 0) return;
-
-    const csv = generateCanvasCSV(rubricsToExport);
-    if (!csv) return;
 
     const formatLocalDate = () => {
       const now = new Date();
@@ -74,25 +72,35 @@ const SetupDrawer = () => {
 
     const timestamp = formatLocalDate();
 
-    let filename = `rubrics_export_${timestamp}.csv`;
+    const downloadBlob = (blob, filename) => {
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', filename);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    };
 
     if (rubricsToExport.length === 1) {
-      const rubricName = rubricsToExport[0].name || 'rubric';
-      filename = `${rubricName.replace(/\s+/g, '_')}_${timestamp}.csv`;
-    } else if (rubricsToExport.length > 1) {
-      filename = `rubrics_${rubricsToExport.length}_items_${timestamp}.csv`;
+      const rubric = rubricsToExport[0];
+      const csv = generateCanvasCSV([rubric]);
+      const filename = `${(rubric.name || 'rubric').replace(/\s+/g, '_')}_${timestamp}.csv`;
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      downloadBlob(blob, filename);
+    } else {
+      const zip = new JSZip();
+      rubricsToExport.forEach((rubric) => {
+        const csv = generateCanvasCSV([rubric]);
+        const itemName = (rubric.name || 'rubric').replace(/\s+/g, '_');
+        zip.file(`${itemName}_${timestamp}.csv`, csv);
+      });
+
+      const zipContent = await zip.generateAsync({ type: 'blob' });
+      const zipName = `rubrics_${rubricsToExport.length}_items_${timestamp}.zip`;
+      downloadBlob(zipContent, zipName);
     }
-
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-
-    const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute('download', filename);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
 
     setDownloadOpen(false);
   };
