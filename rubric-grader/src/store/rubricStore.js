@@ -163,6 +163,7 @@ const useRubricStore = create((set, get) => ({
     updatedRubric.criteria = updatedCriteria;
     set({ currentRubric: updatedRubric });
     get().saveSession();
+    get().persistCurrentRubric();
   },
 
   updateLevel: (criterionIndex, levelIndex, updates) => {
@@ -210,6 +211,7 @@ const useRubricStore = create((set, get) => ({
     updatedRubric.criteria = updatedCriteria;
     set({ currentRubric: updatedRubric });
     get().saveSession();
+    get().persistCurrentRubric();
 
     return levels.indexOf(editedLevelRef);
   },
@@ -252,6 +254,51 @@ const useRubricStore = create((set, get) => ({
     updatedRubric.criteria = updatedCriteria;
     set({ currentRubric: updatedRubric });
     get().saveSession();
+    get().persistCurrentRubric();
+  },
+
+  replaceCriteria: (newCriteria) => {
+    const state = get();
+    const { currentRubric, currentCriterionIndex } = state;
+    if (!currentRubric || !Array.isArray(newCriteria)) return;
+
+    const sanitizedCriteria = newCriteria.map((criterion) => ({
+      name: criterion?.name || '',
+      description: criterion?.description || '',
+      enableRange: criterion?.enableRange || '',
+      levels: Array.isArray(criterion?.levels)
+        ? criterion.levels.map((level) => ({
+            name: level?.name || '',
+            description: level?.description || '',
+            points:
+              level?.points !== undefined && level?.points !== null
+                ? Number(level.points)
+                : 0,
+          }))
+        : [],
+      selectedLevel:
+        criterion?.selectedLevel !== undefined
+          ? criterion.selectedLevel
+          : null,
+      comment: criterion?.comment || '',
+    }));
+
+    const nextIndex =
+      sanitizedCriteria.length === 0
+        ? 0
+        : Math.min(currentCriterionIndex || 0, sanitizedCriteria.length - 1);
+
+    const updatedRubric = {
+      ...currentRubric,
+      criteria: sanitizedCriteria,
+    };
+
+    set({
+      currentRubric: updatedRubric,
+      currentCriterionIndex: nextIndex,
+    });
+    state.saveSession();
+    state.persistCurrentRubric();
   },
 
   // Navigation
@@ -322,6 +369,28 @@ const useRubricStore = create((set, get) => ({
     const { currentRubric } = get();
     if (!currentRubric) return { earned: 0, possible: 0 };
     return calculateTotalPoints(currentRubric);
+  },
+
+  persistCurrentRubric: () => {
+    const { currentRubric, currentCourse, availableRubrics, loadRubricsForCourse } = get();
+    if (!currentRubric || !currentCourse) return;
+
+    saveRubricToStorage(currentCourse, currentRubric);
+
+    const updatedRubrics = [...availableRubrics];
+    const existingIndex = updatedRubrics.findIndex(
+      (rubric) => rubric.name === currentRubric.name
+    );
+    const rubricCopy = JSON.parse(JSON.stringify(currentRubric));
+
+    if (existingIndex >= 0) {
+      updatedRubrics[existingIndex] = rubricCopy;
+    } else {
+      updatedRubrics.push(rubricCopy);
+    }
+
+    set({ availableRubrics: updatedRubrics });
+    loadRubricsForCourse(currentCourse);
   },
 }));
 

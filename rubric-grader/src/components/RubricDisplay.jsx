@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Box,
   Paper,
@@ -14,6 +14,8 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
+  Alert,
+  Collapse,
 } from '@mui/material';
 import {
   NavigateBefore,
@@ -21,10 +23,38 @@ import {
   Comment as CommentIcon,
   Add as AddIcon,
   Edit as EditIcon,
+  ArrowUpward,
+  ArrowDownward,
+  Delete as DeleteIcon,
+  DragIndicator,
 } from '@mui/icons-material';
 import { useHotkeys } from 'react-hotkeys-hook';
 import useRubricStore from '../store/rubricStore';
 import { renderTextWithLatex } from '../utils/latex.jsx';
+
+const calculatePossiblePoints = (criteria = []) =>
+  criteria.reduce((sum, criterion) => {
+    if (!criterion?.levels?.length) return sum;
+    const maxPoints = Math.max(
+      ...criterion.levels.map((level) =>
+        Number(level?.points) || 0
+      )
+    );
+    return Number.isFinite(maxPoints) ? sum + maxPoints : sum;
+  }, 0);
+
+const cloneCriteria = (criteria = []) =>
+  criteria.map((criterion) => ({
+    ...criterion,
+    levels: Array.isArray(criterion.levels)
+      ? criterion.levels.map((level) => ({ ...level }))
+      : [],
+  }));
+
+const formatPoints = (points) => {
+  const value = Number(points) || 0;
+  return Number.isInteger(value) ? value : value.toFixed(2);
+};
 
 const RubricDisplay = () => {
   const {
@@ -38,6 +68,7 @@ const RubricDisplay = () => {
     addLevel,
     updateLevel,
     deleteLevel,
+    replaceCriteria,
   } = useRubricStore();
 
   const [commentFocused, setCommentFocused] = useState(false);
@@ -51,10 +82,19 @@ const RubricDisplay = () => {
   });
   const [levelFormError, setLevelFormError] = useState('');
   const [editingLevelIndex, setEditingLevelIndex] = useState(null);
+  const [criteriaDialogOpen, setCriteriaDialogOpen] = useState(false);
+  const [draftCriteria, setDraftCriteria] = useState([]);
+  const [draggedCriterionIndex, setDraggedCriterionIndex] = useState(null);
+  const [expandedDescriptions, setExpandedDescriptions] = useState({});
 
   // Get criterion safely - will be null if no rubric
   const criterion = currentRubric?.criteria?.[currentCriterionIndex] || null;
   const totalCriteria = currentRubric?.criteria?.length || 0;
+
+  const currentTotalPossible = useMemo(
+    () => calculatePossiblePoints(currentRubric?.criteria || []),
+    [currentRubric]
+  );
 
   const handleLevelSelect = (levelIndex) => {
     if (!currentRubric) return;
@@ -139,6 +179,119 @@ const RubricDisplay = () => {
     if (!currentRubric || editingLevelIndex === null) return;
     deleteLevel(currentCriterionIndex, editingLevelIndex);
     handleCloseLevelDialog();
+  };
+
+  const handleOpenCriteriaDialog = () => {
+    setDraftCriteria(cloneCriteria(currentRubric?.criteria || []));
+    setCriteriaDialogOpen(true);
+    const initialExpanded = {};
+    (currentRubric?.criteria || []).forEach((_, idx) => {
+      initialExpanded[idx] = false;
+    });
+    setExpandedDescriptions(initialExpanded);
+  };
+  const toggleDescription = (index) => () => {
+    setExpandedDescriptions((prev) => ({
+      ...prev,
+      [index]: !prev[index],
+    }));
+  };
+
+
+  const handleCloseCriteriaDialog = () => {
+    setCriteriaDialogOpen(false);
+  };
+
+  const handleDraftCriterionChange = (index, field) => (event) => {
+    const value = event.target.value;
+    setDraftCriteria((prev) => {
+      const updated = cloneCriteria(prev);
+      if (!updated[index]) return prev;
+      updated[index][field] = value;
+      return updated;
+    });
+  };
+
+  const handleAddCriterion = () => {
+    setDraftCriteria((prev) => [
+      ...cloneCriteria(prev),
+      {
+        name: '',
+        description: '',
+        enableRange: '',
+        levels: [],
+        selectedLevel: null,
+        comment: '',
+      },
+    ]);
+  };
+
+  const handleAddCriterionBelow = (index) => {
+    setDraftCriteria((prev) => {
+      const updated = cloneCriteria(prev);
+      updated.splice(index + 1, 0, {
+        name: '',
+        description: '',
+        enableRange: '',
+        levels: [],
+        selectedLevel: null,
+        comment: '',
+      });
+      return updated;
+    });
+  };
+
+  const handleDeleteCriterion = (index) => {
+    setDraftCriteria((prev) => prev.filter((_, idx) => idx !== index));
+  };
+
+  const handleMoveCriterion = (index, direction) => () => {
+    setDraftCriteria((prev) => {
+      const updated = cloneCriteria(prev);
+      const targetIndex = index + direction;
+      if (targetIndex < 0 || targetIndex >= updated.length) return prev;
+      const [removed] = updated.splice(index, 1);
+      updated.splice(targetIndex, 0, removed);
+      return updated;
+    });
+  };
+
+  const handleEditLevelsFromCriteria = (index) => () => {
+    goToCriterion(index);
+    setCriteriaDialogOpen(false);
+  };
+
+  const handleSaveCriteria = () => {
+    replaceCriteria(cloneCriteria(draftCriteria));
+    setCriteriaDialogOpen(false);
+  };
+
+  const draftTotalPossible = useMemo(
+    () => calculatePossiblePoints(draftCriteria),
+    [draftCriteria]
+  );
+  const handleCriterionDragStart = (index) => (event) => {
+    setDraggedCriterionIndex(index);
+    if (event?.dataTransfer) {
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', String(index));
+    }
+  };
+
+  const handleCriterionDragOver = (index) => (event) => {
+    event.preventDefault();
+    if (draggedCriterionIndex === null || draggedCriterionIndex === index) return;
+    setDraftCriteria((prev) => {
+      const updated = cloneCriteria(prev);
+      const [moved] = updated.splice(draggedCriterionIndex, 1);
+      updated.splice(index, 0, moved);
+      return updated;
+    });
+    setDraggedCriterionIndex(index);
+  };
+
+  const handleCriterionDragEnd = () => {
+    setDraggedCriterionIndex(null);
   };
 
   // All hooks must be called unconditionally - disable when no rubric
@@ -393,9 +546,29 @@ const RubricDisplay = () => {
 
       {/* Criterion Overview */}
       <Paper sx={{ p: 2, mt: 2 }}>
-        <Typography variant="subtitle2" gutterBottom>
-          All Criteria:
-        </Typography>
+        <Stack
+          direction={{ xs: 'column', sm: 'row' }}
+          spacing={1}
+          justifyContent="space-between"
+          alignItems={{ xs: 'flex-start', sm: 'center' }}
+          sx={{ mb: 2 }}
+        >
+          <Typography variant="subtitle2">
+            All Criteria
+          </Typography>
+          <Stack direction="row" spacing={1} alignItems="center">
+            <Typography variant="body2" color="text.secondary">
+              Total Possible: {formatPoints(currentTotalPossible)} pts
+            </Typography>
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={handleOpenCriteriaDialog}
+            >
+              Manage Criteria
+            </Button>
+          </Stack>
+        </Stack>
         <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
           {currentRubric.criteria.map((crit, index) => {
             const isComplete = crit.selectedLevel !== null && crit.selectedLevel !== undefined;
@@ -505,6 +678,204 @@ const RubricDisplay = () => {
               {levelDialogMode === 'add' ? 'Add Level' : 'Save Changes'}
             </Button>
           </Box>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={criteriaDialogOpen}
+        onClose={handleCloseCriteriaDialog}
+        fullWidth
+        maxWidth="md"
+      >
+        <DialogTitle>Manage Criteria</DialogTitle>
+        <DialogContent dividers>
+          <Stack spacing={2}>
+            <Alert severity="info" sx={{ py: 0.75 }}>
+              Use this editor to add, rename, reorder, or remove criteria.
+              Levels can be edited from the grading view.
+            </Alert>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: -0.5 }}>
+              Total Possible Points: <strong>{formatPoints(draftTotalPossible)} pts</strong>
+            </Typography>
+            {draftCriteria.length === 0 ? (
+              <Paper variant="outlined" sx={{ p: 2, textAlign: 'center' }}>
+                <Typography variant="body2" color="text.secondary">
+                  No criteria yet. Add one to get started.
+                </Typography>
+              </Paper>
+            ) : (
+              <Stack spacing={0.9}>
+                {draftCriteria.map((crit, index) => (
+                  <Paper
+                    key={`criterion-${index}`}
+                    variant="outlined"
+                    draggable
+                    onDragStart={handleCriterionDragStart(index)}
+                    onDragOver={handleCriterionDragOver(index)}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      if (event?.dataTransfer) {
+                        event.dataTransfer.dropEffect = 'move';
+                        event.dataTransfer.clearData();
+                      }
+                      handleCriterionDragEnd();
+                    }}
+                    onDragEnd={handleCriterionDragEnd}
+                    sx={{
+                      p: 1.15,
+                      borderColor:
+                        draggedCriterionIndex === index
+                          ? 'primary.main'
+                          : 'divider',
+                      boxShadow:
+                        draggedCriterionIndex === index ? 4 : 'none',
+                    }}
+                  >
+                    <Stack spacing={0.4}>
+                      <Box
+                        sx={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 0.6,
+                          width: '100%',
+                          flexWrap: 'wrap',
+                        }}
+                      >
+                        <Stack direction="row" spacing={0.4} alignItems="center">
+                          <Box
+                            sx={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              cursor: 'grab',
+                              color: 'text.secondary',
+                            }}
+                            aria-hidden="true"
+                          >
+                            <DragIndicator fontSize="small" />
+                          </Box>
+                          <Typography variant="subtitle2">
+                            Criterion {index + 1}
+                          </Typography>
+                        </Stack>
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          sx={{
+                            flexGrow: 1,
+                            textAlign: 'center',
+                            minWidth: 120,
+                          }}
+                        >
+                          {crit.levels?.length || 0} levels • Max{' '}
+                          {formatPoints(calculatePossiblePoints([crit]))} pts
+                        </Typography>
+                        <Stack
+                          direction="row"
+                          spacing={0.4}
+                          alignItems="center"
+                          sx={{ ml: 'auto' }}
+                        >
+                          <IconButton
+                            size="small"
+                            onClick={handleMoveCriterion(index, -1)}
+                            disabled={index === 0}
+                            aria-label="Move criterion up"
+                          >
+                            <ArrowUpward fontSize="small" />
+                          </IconButton>
+                          <IconButton
+                            size="small"
+                            onClick={handleMoveCriterion(index, 1)}
+                            disabled={index === draftCriteria.length - 1}
+                            aria-label="Move criterion down"
+                          >
+                            <ArrowDownward fontSize="small" />
+                          </IconButton>
+                          <Button
+                            size="small"
+                            onClick={handleEditLevelsFromCriteria(index)}
+                            sx={{ textTransform: 'none' }}
+                          >
+                            Edit Levels
+                          </Button>
+                          <IconButton
+                            size="small"
+                            color="error"
+                            onClick={() => handleDeleteCriterion(index)}
+                            aria-label="Delete criterion"
+                          >
+                            <DeleteIcon fontSize="small" />
+                          </IconButton>
+                        </Stack>
+                      </Box>
+                      <TextField
+                        label="Criterion Name"
+                        value={crit.name}
+                        onChange={handleDraftCriterionChange(index, 'name')}
+                        size="small"
+                        sx={{ mt: 0.2 }}
+                        fullWidth
+                      />
+                      <Box>
+                        <Button
+                          variant="text"
+                          size="small"
+                          onClick={toggleDescription(index)}
+                          disableRipple
+                          sx={{
+                            textTransform: 'none',
+                            px: 0,
+                            py: 0,
+                            minHeight: 'auto',
+                            justifyContent: 'flex-start',
+                          }}
+                        >
+                          {expandedDescriptions[index] ? 'Hide Description' : 'Show Description'}
+                        </Button>
+                        <Collapse in={expandedDescriptions[index]}>
+                          <TextField
+                            label="Description"
+                            value={crit.description}
+                            onChange={handleDraftCriterionChange(index, 'description')}
+                            multiline
+                            minRows={2}
+                            size="small"
+                            sx={{ mt: 0.2 }}
+                            fullWidth
+                          />
+                        </Collapse>
+                      </Box>
+                    </Stack>
+                    <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 0.15, mb: -1 }}>
+                      <Button
+                        size="small"
+                        variant="text"
+                        onClick={() => handleAddCriterionBelow(index)}
+                        startIcon={<AddIcon fontSize="small" />}
+                        sx={{ textTransform: 'none', px: 0, minHeight: 'auto', lineHeight: 1.15 }}
+                      >
+                        Add Criterion Below
+                      </Button>
+                    </Box>
+                  </Paper>
+                ))}
+              </Stack>
+            )}
+            <Button variant="outlined" startIcon={<AddIcon />} onClick={handleAddCriterion}>
+              Add Criterion
+            </Button>
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCloseCriteriaDialog}>Cancel</Button>
+          <Button
+            variant="contained"
+            onClick={handleSaveCriteria}
+            disabled={!draftCriteria.length}
+          >
+            Save Changes
+          </Button>
         </DialogActions>
       </Dialog>
     </Box>
