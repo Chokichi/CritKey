@@ -10,6 +10,40 @@ import {
 } from '../utils/localStorage';
 import { calculateTotalPoints } from '../utils/csvParser';
 
+const selectMaxLevels = (rubric) => {
+  if (!rubric) return rubric;
+
+  const updatedCriteria = (rubric.criteria || []).map((criterion) => {
+    if (!criterion?.levels?.length) {
+      return {
+        ...criterion,
+        selectedLevel: null,
+      };
+    }
+
+    let maxIndex = 0;
+    let maxPoints = Number(criterion.levels[0]?.points) || 0;
+
+    criterion.levels.forEach((level, index) => {
+      const points = Number(level?.points) || 0;
+      if (points > maxPoints) {
+        maxPoints = points;
+        maxIndex = index;
+      }
+    });
+
+    return {
+      ...criterion,
+      selectedLevel: maxIndex,
+    };
+  });
+
+  return {
+    ...rubric,
+    criteria: updatedCriteria,
+  };
+};
+
 const useRubricStore = create((set, get) => ({
   // Current state
   currentCourse: null,
@@ -18,6 +52,7 @@ const useRubricStore = create((set, get) => ({
   availableCourses: [],
   availableRubrics: [],
   autoAdvance: true,
+  correctByDefault: false,
 
   // Initialize store
   initialize: () => {
@@ -40,9 +75,13 @@ const useRubricStore = create((set, get) => ({
         },
         currentCriterionIndex: session.currentCriterionIndex || 0,
         autoAdvance: session.autoAdvance !== undefined ? session.autoAdvance : true,
+        correctByDefault: session.correctByDefault !== undefined ? session.correctByDefault : false,
       });
       
       get().loadRubricsForCourse(session.currentCourse);
+      if (session.correctByDefault && session.currentRubric) {
+        set((state) => ({ currentRubric: selectMaxLevels(state.currentRubric) }));
+      }
     } else {
       set({ availableCourses: courses });
     }
@@ -73,25 +112,33 @@ const useRubricStore = create((set, get) => ({
     const rubric = get().availableRubrics.find(r => r.name === rubricName);
     if (rubric) {
       // Create a fresh copy for grading
-      const rubricCopy = JSON.parse(JSON.stringify(rubric));
+      let rubricCopy = JSON.parse(JSON.stringify(rubric));
       if (typeof rubricCopy.feedbackLabel !== 'string') {
         rubricCopy.feedbackLabel = '';
       }
+      const { correctByDefault } = get();
+      if (correctByDefault) {
+        rubricCopy = selectMaxLevels(rubricCopy);
+      }
       set({ currentRubric: rubricCopy, currentCriterionIndex: 0 });
       get().saveSession();
+      get().persistCurrentRubric();
     }
   },
 
   importRubric: (rubric) => {
-    const { currentCourse } = get();
+    const { currentCourse, correctByDefault } = get();
     if (!currentCourse) {
       throw new Error('Please select a course first');
     }
     
-    const rubricWithLabel = {
+    let rubricWithLabel = {
       feedbackLabel: '',
       ...rubric,
     };
+    if (correctByDefault) {
+      rubricWithLabel = selectMaxLevels(rubricWithLabel);
+    }
     saveRubricToStorage(currentCourse, rubricWithLabel);
     get().loadRubricsForCourse(currentCourse);
     
@@ -271,7 +318,7 @@ const useRubricStore = create((set, get) => ({
 
   replaceCriteria: (newCriteria) => {
     const state = get();
-    const { currentRubric, currentCriterionIndex } = state;
+    const { currentRubric, currentCriterionIndex, correctByDefault } = state;
     if (!currentRubric || !Array.isArray(newCriteria)) return;
 
     const sanitizedCriteria = newCriteria.map((criterion) => ({
@@ -311,6 +358,9 @@ const useRubricStore = create((set, get) => ({
     });
     state.saveSession();
     state.persistCurrentRubric();
+    if (correctByDefault) {
+      state.applyCorrectByDefault();
+    }
   },
 
   // Navigation
@@ -347,29 +397,42 @@ const useRubricStore = create((set, get) => ({
     get().saveSession();
   },
 
+  setCorrectByDefault: (value) => {
+    set({ correctByDefault: value });
+    if (value) {
+      get().applyCorrectByDefault();
+    }
+    get().saveSession();
+  },
+
   // Session management
   saveSession: () => {
-    const { currentCourse, currentRubric, currentCriterionIndex, autoAdvance } = get();
+    const { currentCourse, currentRubric, currentCriterionIndex, autoAdvance, correctByDefault } = get();
     saveCurrentSession({
       currentCourse,
       currentRubric,
       currentCriterionIndex,
       autoAdvance,
+      correctByDefault,
     });
   },
 
   resetGrading: () => {
-    const { currentRubric } = get();
+    const { currentRubric, correctByDefault, applyCorrectByDefault } = get();
     if (!currentRubric) return;
 
     // Reset all selections and comments
-    const resetRubric = { ...currentRubric };
+    let resetRubric = { ...currentRubric };
     resetRubric.criteria = resetRubric.criteria.map(criterion => ({
       ...criterion,
       selectedLevel: null,
       comment: '',
     }));
     resetRubric.feedbackLabel = '';
+
+    if (correctByDefault) {
+      resetRubric = selectMaxLevels(resetRubric);
+    }
 
     set({ currentRubric: resetRubric, currentCriterionIndex: 0 });
     get().saveSession();
@@ -389,6 +452,15 @@ const useRubricStore = create((set, get) => ({
     const { currentRubric } = get();
     if (!currentRubric) return { earned: 0, possible: 0 };
     return calculateTotalPoints(currentRubric);
+  },
+
+  applyCorrectByDefault: () => {
+    const { currentRubric, correctByDefault } = get();
+    if (!correctByDefault || !currentRubric) return;
+    const updatedRubric = selectMaxLevels(currentRubric);
+    set({ currentRubric: updatedRubric });
+    get().persistCurrentRubric();
+    get().saveSession();
   },
 
   persistCurrentRubric: () => {

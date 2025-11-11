@@ -1,6 +1,6 @@
 {
   "name": "critkey",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "CritKey - Fast rubric grading app with keyboard shortcuts",
   "private": true,
   "scripts": {

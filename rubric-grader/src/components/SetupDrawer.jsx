@@ -30,7 +30,7 @@ const SetupDrawer = () => {
   const [downloadOpen, setDownloadOpen] = useState(false);
   const [selectedRubricNames, setSelectedRubricNames] = useState([]);
 
-  const { availableRubrics, currentCourse, autoAdvance, setAutoAdvance } = useRubricStore();
+  const { availableRubrics, currentCourse, autoAdvance, setAutoAdvance, correctByDefault, setCorrectByDefault } = useRubricStore();
 
   const sortedRubrics = useMemo(() => {
     return [...availableRubrics].sort((a, b) => a.name.localeCompare(b.name));
@@ -133,17 +133,28 @@ const SetupDrawer = () => {
           <Box sx={{ py: 1 }}>
             <CourseSelector />
             <RubricSelector />
-            <FormControlLabel
-              control={
-                <Switch
-                  checked={autoAdvance}
-                  onChange={(event) => setAutoAdvance(event.target.checked)}
-                  size="small"
-                />
-              }
-              label="Auto advance after selection"
-              sx={{ my: 1 }}
-            />
+            <FormGroup sx={{ my: 1 }}>
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={autoAdvance}
+                    onChange={(event) => setAutoAdvance(event.target.checked)}
+                    size="small"
+                  />
+                }
+                label="Auto advance after selection"
+              />
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={correctByDefault}
+                    onChange={(event) => setCorrectByDefault(event.target.checked)}
+                    size="small"
+                  />
+                }
+                label="Correct by default"
+              />
+            </FormGroup>
             <Button
               fullWidth
               variant="outlined"
