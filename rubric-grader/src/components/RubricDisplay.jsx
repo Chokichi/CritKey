@@ -317,7 +317,10 @@ const RubricDisplay = () => {
   // Navigation hotkeys
   useHotkeys(
     'n, right',
-    () => {
+    (event) => {
+      if (event?.key === 'ArrowRight') {
+        event.preventDefault();
+      }
       if (canUseHotkeys) goToNextCriterion();
     },
     { enabled: canUseHotkeys },
@@ -326,7 +329,10 @@ const RubricDisplay = () => {
 
   useHotkeys(
     'p, left',
-    () => {
+    (event) => {
+      if (event?.key === 'ArrowLeft') {
+        event.preventDefault();
+      }
       if (canUseHotkeys) goToPreviousCriterion();
     },
     { enabled: canUseHotkeys },
@@ -418,11 +424,11 @@ const RubricDisplay = () => {
           />
         )}
         <Typography variant="h6" gutterBottom>
-          {criterion.name}
+          {renderTextWithLatex(criterion.name, { inline: true })}
         </Typography>
         {criterion.description && (
           <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-            {criterion.description}
+            {renderTextWithLatex(criterion.description, { inline: true })}
           </Typography>
         )}
 
@@ -448,7 +454,7 @@ const RubricDisplay = () => {
                       level.description ? (
                         <Box sx={{ maxWidth: 320 }}>
                           {renderTextWithLatex(level.description, {
-                            inline: false,
+                            inline: true,
                           })}
                         </Box>
                       ) : ''
@@ -664,7 +670,7 @@ const RubricDisplay = () => {
                 </Typography>
                 <Box component="div">
                   {levelForm.description ? (
-                    renderTextWithLatex(levelForm.description, { inline: false })
+                    renderTextWithLatex(levelForm.description, { inline: true })
                   ) : (
                     <Typography variant="body2" color="text.secondary">
                       Description preview will appear here.

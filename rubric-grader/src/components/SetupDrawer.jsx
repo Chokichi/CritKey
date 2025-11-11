@@ -63,12 +63,24 @@ const SetupDrawer = () => {
     const csv = generateCanvasCSV(rubricsToExport);
     if (!csv) return;
 
-    const timestamp = new Date()
-      .toISOString()
-      .replace(/[:.]/g, '-');
-    const filename = currentCourse
-      ? `rubrics_${currentCourse}_${timestamp}.csv`
-      : `rubrics_export_${timestamp}.csv`;
+    const formatLocalDate = () => {
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, '0');
+      const day = String(now.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+
+    const timestamp = formatLocalDate();
+
+    let filename = `rubrics_export_${timestamp}.csv`;
+
+    if (rubricsToExport.length === 1) {
+      const rubricName = rubricsToExport[0].name || 'rubric';
+      filename = `${rubricName.replace(/\s+/g, '_')}_${timestamp}.csv`;
+    } else if (rubricsToExport.length > 1) {
+      filename = `rubrics_${rubricsToExport.length}_items_${timestamp}.csv`;
+    }
 
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);

@@ -375,9 +375,11 @@ const useRubricStore = create((set, get) => ({
       selectedLevel: null,
       comment: '',
     }));
+    resetRubric.feedbackLabel = '';
 
     set({ currentRubric: resetRubric, currentCriterionIndex: 0 });
     get().saveSession();
+    get().persistCurrentRubric();
   },
 
   clearSession: () => {
