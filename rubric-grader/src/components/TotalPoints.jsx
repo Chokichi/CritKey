@@ -13,13 +13,12 @@ const TotalPoints = () => {
 
   return (
     <Paper
-      elevation={4}
+      elevation={2}
       sx={{
-        p: 2,
+        p: 1.5,
+        mb: 2,
         backgroundColor: 'primary.main',
         color: 'primary.contrastText',
-        position: 'sticky',
-        top: 16,
       }}
     >
       <Stack spacing={1}>

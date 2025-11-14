@@ -767,6 +767,9 @@ const RubricDisplay = () => {
       <Dialog
         open={levelDialogOpen}
         onClose={handleCloseLevelDialog}
+        PaperProps={{
+          sx: { zIndex: 1400 }
+        }}
         fullWidth
         maxWidth="sm"
       >
@@ -852,6 +855,9 @@ const RubricDisplay = () => {
       <Dialog
         open={criteriaDialogOpen}
         onClose={handleCloseCriteriaDialog}
+        PaperProps={{
+          sx: { zIndex: 1400 }
+        }}
         fullWidth
         maxWidth="md"
       >

@@ -173,6 +173,9 @@ const SetupDrawer = () => {
       <Dialog
         open={downloadOpen}
         onClose={handleCloseDownload}
+        PaperProps={{
+          sx: { zIndex: 1400 }
+        }}
         fullWidth
         maxWidth="sm"
       >

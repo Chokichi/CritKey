@@ -1,20 +1,28 @@
-import { useEffect } from 'react';
+import { useEffect, useState, useRef } from 'react';
+import { useHotkeys } from 'react-hotkeys-hook';
 import { 
   CssBaseline, 
   ThemeProvider, 
   createTheme,
-  Container,
   Box,
   Typography,
   Paper,
-  Divider,
   Stack,
+  IconButton,
+  Tooltip,
 } from '@mui/material';
+import { Keyboard as KeyboardIcon } from '@mui/icons-material';
 import useRubricStore from './store/rubricStore';
-import SetupDrawer from './components/SetupDrawer';
+import useCanvasStore from './store/canvasStore';
+import SideDrawer from './components/SideDrawer';
 import RubricDisplay from './components/RubricDisplay';
-import TotalPoints from './components/TotalPoints';
 import FeedbackGenerator from './components/FeedbackGenerator';
+import PDFViewer from './components/PDFViewer';
+import DockableRubricWindow from './components/DockableRubricWindow';
+import DockedRubricPanel from './components/DockedRubricPanel';
+import TotalPoints from './components/TotalPoints';
+import ShortcutsModal from './components/ShortcutsModal';
+import { getRubricWindowState, saveRubricWindowState } from './utils/localStorage';
 
 const theme = createTheme({
   palette: {
@@ -30,68 +38,272 @@ const theme = createTheme({
 
 function App() {
   const initialize = useRubricStore((state) => state.initialize);
+  const initializeCanvas = useCanvasStore((state) => state.initialize);
+  const selectedSubmission = useCanvasStore((state) => state.selectedSubmission);
+  const submissions = useCanvasStore((state) => state.submissions);
+  const submissionIndex = useCanvasStore((state) => state.submissionIndex);
+  const apiToken = useCanvasStore((state) => state.apiToken);
+  const nextSubmission = useCanvasStore((state) => state.nextSubmission);
+  const previousSubmission = useCanvasStore((state) => state.previousSubmission);
+  
+  const pdfViewerRef = useRef(null);
+  const [rubricDocked, setRubricDocked] = useState(() => {
+    const saved = getRubricWindowState();
+    return saved?.docked || null;
+  });
+  const savedState = getRubricWindowState();
+  const [rubricWidth, setRubricWidth] = useState(savedState?.size?.width || 600);
+  const [rubricHeight, setRubricHeight] = useState(savedState?.size?.height || 600);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  
+  // Handle undock
+  const handleUndock = () => {
+    setRubricDocked(null);
+    // Save the undocked state
+    const state = getRubricWindowState();
+    if (state) {
+      saveRubricWindowState({
+        ...state,
+        docked: null,
+      });
+    }
+  };
+  
+  // Save width/height changes
+  useEffect(() => {
+    const state = getRubricWindowState();
+    if (state) {
+      saveRubricWindowState({
+        ...state,
+        size: { width: rubricWidth, height: rubricHeight },
+      });
+    } else {
+      // Create initial state if none exists
+      saveRubricWindowState({
+        docked: rubricDocked,
+        position: { x: 0, y: 0 },
+        size: { width: rubricWidth, height: rubricHeight },
+      });
+    }
+  }, [rubricWidth, rubricHeight, rubricDocked]);
 
   useEffect(() => {
     initialize();
-  }, [initialize]);
+    initializeCanvas();
+  }, [initialize, initializeCanvas]);
+
+  // Get PDF URL from submission
+  const pdfUrl = selectedSubmission?.attachments?.[0]?.url || null;
+
+  // Hotkeys for submission navigation
+  useHotkeys('ctrl+shift+right, meta+shift+right', (e) => {
+    e.preventDefault();
+    if (submissionIndex < submissions.length - 1) {
+      nextSubmission();
+    }
+  }, [submissionIndex, submissions.length, nextSubmission]);
+
+  useHotkeys('ctrl+shift+left, meta+shift+left', (e) => {
+    e.preventDefault();
+    if (submissionIndex > 0) {
+      previousSubmission();
+    }
+  }, [submissionIndex, previousSubmission]);
+
+  // Shortcuts modal hotkey
+  useHotkeys('?', (e) => {
+    e.preventDefault();
+    setShortcutsOpen(true);
+  }, []);
 
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
       <Box 
         sx={{ 
-          minHeight: '100vh',
+          height: '100vh',
+          width: '100vw',
           display: 'flex',
           flexDirection: 'column',
           backgroundColor: 'background.default',
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          overflow: 'hidden',
         }}
       >
-        <Container maxWidth="xl" sx={{ py: 3, flex: 1, display: 'flex', flexDirection: 'column' }}>
-          {/* Header */}
-          <Paper elevation={0} sx={{ mb: 3, p: 2, backgroundColor: 'grey.50' }}>
-            <Typography variant="h5" gutterBottom fontWeight="bold">
-              CritKey Grader
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              Fast rubric grading with keyboard shortcuts
-            </Typography>
-          </Paper>
+        {/* Side Drawer */}
+        <SideDrawer />
 
-          {/* Main Content */}
-          <Stack 
-            direction={{ xs: 'column', md: 'row' }} 
-            spacing={2} 
-            sx={{ flex: 1, minHeight: 0 }}
-          >
-            {/* Left Panel - Setup */}
-            <Box sx={{ width: { xs: '100%', md: '33.333%' } }}>
-              <SetupDrawer />
+        {/* Header */}
+        <Paper 
+          elevation={0} 
+          sx={{ 
+            px: 2,
+            py: 1,
+            backgroundColor: 'grey.50',
+            borderBottom: 1,
+            borderColor: 'divider',
+            zIndex: 100,
+            flexShrink: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+          }}
+        >
+          <Typography variant="h6" fontWeight="bold">
+            CritKey Grader
+          </Typography>
+          <Tooltip title="Keyboard Shortcuts">
+            <IconButton
+              size="small"
+              onClick={() => setShortcutsOpen(true)}
+              sx={{ color: 'text.secondary' }}
+            >
+              <KeyboardIcon />
+            </IconButton>
+          </Tooltip>
+        </Paper>
+
+        {/* PDF Viewer and Rubric Layout */}
+        <Stack
+          direction={
+            rubricDocked === 'left' || rubricDocked === 'right' ? 'row' : 'column'
+          }
+          sx={{
+            flex: 1,
+            minHeight: 0,
+            maxHeight: '100%',
+            position: 'relative',
+            overflow: 'hidden',
+          }}
+        >
+          {/* Left Docked Rubric */}
+          {rubricDocked === 'left' && (
+            <DockedRubricPanel
+              docked="left"
+              width={rubricWidth}
+              height={rubricHeight}
+              onWidthChange={setRubricWidth}
+              onHeightChange={setRubricHeight}
+              onUndock={handleUndock}
+            >
               <TotalPoints />
-            </Box>
-
-            {/* Right Panel - Grading */}
-            <Box sx={{ width: { xs: '100%', md: '66.666%' }, flex: 1, minHeight: 0 }}>
               <RubricDisplay />
               <FeedbackGenerator />
-            </Box>
-          </Stack>
+            </DockedRubricPanel>
+          )}
 
-          {/* Keyboard Shortcuts Help */}
-          <Paper 
-            elevation={0} 
-            sx={{ 
-              mt: 3, 
-              p: 2, 
-              backgroundColor: 'grey.50',
-              borderTop: 1,
-              borderColor: 'divider',
+          {/* PDF Viewer */}
+          <Box
+            ref={pdfViewerRef}
+            sx={{
+              flex: 1,
+              minHeight: 0,
+              maxHeight: '100%',
+              position: 'relative',
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column',
             }}
           >
-            <Typography variant="caption" color="text.secondary" component="div">
-              <strong>Keyboard Shortcuts:</strong> 1-9: Select level | N/→: Next | P/←: Previous | C: Comment | Ctrl+Enter: Generate feedback
-            </Typography>
-          </Paper>
-        </Container>
+            {pdfUrl ? (
+              <PDFViewer
+                fileUrl={pdfUrl}
+                apiToken={apiToken}
+                onNext={nextSubmission}
+                onPrevious={previousSubmission}
+                hasNext={submissionIndex < submissions.length - 1}
+                hasPrevious={submissionIndex > 0}
+              />
+            ) : (
+              <Box
+                sx={{
+                  height: '100%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: 'grey.100',
+                }}
+              >
+                <Typography variant="h6" color="text.secondary">
+                  No PDF selected. Select an assignment from Canvas to begin grading.
+                </Typography>
+              </Box>
+            )}
+
+            {/* Top Docked Rubric */}
+            {rubricDocked === 'top' && (
+              <DockedRubricPanel
+                docked="top"
+                width={rubricWidth}
+                height={rubricHeight}
+                onWidthChange={setRubricWidth}
+                onHeightChange={setRubricHeight}
+                onUndock={handleUndock}
+              >
+                <TotalPoints />
+                <RubricDisplay />
+                <FeedbackGenerator />
+              </DockedRubricPanel>
+            )}
+
+            {/* Floating Rubric Window */}
+            {!rubricDocked && (
+              <DockableRubricWindow
+                title="Rubric Grader"
+                pdfViewerRef={pdfViewerRef}
+                onDockChange={setRubricDocked}
+              >
+                <TotalPoints />
+                <RubricDisplay />
+                <FeedbackGenerator />
+              </DockableRubricWindow>
+            )}
+          </Box>
+
+          {/* Right Docked Rubric */}
+          {rubricDocked === 'right' && (
+            <DockedRubricPanel
+              docked="right"
+              width={rubricWidth}
+              height={rubricHeight}
+              onWidthChange={setRubricWidth}
+              onHeightChange={setRubricHeight}
+              onUndock={handleUndock}
+            >
+              <TotalPoints />
+              <RubricDisplay />
+              <FeedbackGenerator />
+            </DockedRubricPanel>
+          )}
+        </Stack>
+
+        {/* Keyboard Shortcuts Footer */}
+        <Paper 
+          elevation={0} 
+          sx={{ 
+            px: 2,
+            py: 0.75, 
+            backgroundColor: 'grey.50',
+            borderTop: 1,
+            borderColor: 'divider',
+            zIndex: 100,
+            flexShrink: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <Typography variant="caption" color="text.secondary" component="div" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            Press <strong>?</strong> or click the <KeyboardIcon sx={{ fontSize: 14 }} /> icon for keyboard shortcuts
+          </Typography>
+        </Paper>
+
+        {/* Shortcuts Modal */}
+        <ShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
       </Box>
     </ThemeProvider>
   );

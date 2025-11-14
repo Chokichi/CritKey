@@ -1,16 +1,33 @@
 import { useState, useRef, useEffect } from 'react';
 import { Paper, Box, IconButton, Stack, Typography } from '@mui/material';
 import { DragIndicator, Minimize, Close } from '@mui/icons-material';
+import { getRubricWindowState, saveRubricWindowState } from '../utils/localStorage';
 
-const DraggableWindow = ({ title, children, onClose }) => {
-  // Calculate initial position - top-right area, accounting for header
-  const getInitialPosition = () => ({
-    x: Math.max(50, window.innerWidth - 650),
-    y: 100,
-  });
-  
-  const [position, setPosition] = useState(getInitialPosition);
-  const [size, setSize] = useState({ width: 600, height: 600 });
+const DOCK_THRESHOLD = 50; // pixels from edge to trigger docking
+const HEADER_HEIGHT = 120;
+const FOOTER_HEIGHT = 50;
+
+const DockableRubricWindow = ({ title, children, onClose, onDockChange, pdfViewerRef }) => {
+  // Load saved state
+  const savedState = getRubricWindowState();
+  const getInitialState = () => {
+    if (savedState) {
+      return {
+        docked: savedState.docked || null,
+        position: savedState.position || { x: Math.max(50, window.innerWidth - 650), y: 100 },
+        size: savedState.size || { width: 600, height: 600 },
+      };
+    }
+    return {
+      docked: null,
+      position: { x: Math.max(50, window.innerWidth - 650), y: 100 },
+      size: { width: 600, height: 600 },
+    };
+  };
+
+  const [docked, setDocked] = useState(getInitialState().docked);
+  const [position, setPosition] = useState(getInitialState().position);
+  const [size, setSize] = useState(getInitialState().size);
   const [isDragging, setIsDragging] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
   const [resizeDirection, setResizeDirection] = useState(null);
@@ -24,26 +41,67 @@ const DraggableWindow = ({ title, children, onClose }) => {
   
   const getMaxDimensions = () => ({
     width: window.innerWidth - 100,
-    height: window.innerHeight - 170,
+    height: window.innerHeight - (HEADER_HEIGHT + FOOTER_HEIGHT),
   });
 
-  // Handle window resize to keep window in viewport
+  // Save state whenever it changes
   useEffect(() => {
-    const handleResize = () => {
-      if (!isDragging && !isResizing && windowRef.current) {
-        const maxX = window.innerWidth - (isMinimized ? MIN_WIDTH : size.width);
-        const maxY = window.innerHeight - 170;
-        
-        setPosition((prev) => ({
-          x: Math.max(0, Math.min(prev.x, maxX)),
-          y: Math.max(0, Math.min(prev.y, maxY)),
-        }));
-      }
-    };
+    saveRubricWindowState({
+      docked,
+      position,
+      size,
+    });
+  }, [docked, position, size]);
 
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, [isDragging, isResizing, isMinimized, size.width]);
+  // Notify parent of dock changes
+  useEffect(() => {
+    if (onDockChange) {
+      onDockChange(docked);
+    }
+  }, [docked, onDockChange]);
+
+  // Get PDF viewer bounds for docking detection
+  const getPdfViewerBounds = () => {
+    if (!pdfViewerRef?.current) {
+      // Fallback to full viewport minus header/footer
+      return {
+        left: 0,
+        right: window.innerWidth,
+        top: HEADER_HEIGHT,
+        bottom: window.innerHeight - FOOTER_HEIGHT,
+      };
+    }
+    const rect = pdfViewerRef.current.getBoundingClientRect();
+    return {
+      left: rect.left,
+      right: rect.right,
+      top: rect.top,
+      bottom: rect.bottom,
+    };
+  };
+
+  // Check if window should dock based on position
+  const checkDocking = (x, y, width, height) => {
+    const bounds = getPdfViewerBounds();
+
+    // Check left edge - window's right edge near PDF viewer's left edge
+    if (Math.abs(x + width - bounds.left) <= DOCK_THRESHOLD && 
+        y >= bounds.top - 50 && y + height <= bounds.bottom + 50) {
+      return 'left';
+    }
+    // Check right edge - window's left edge near PDF viewer's right edge
+    if (Math.abs(x - bounds.right) <= DOCK_THRESHOLD && 
+        y >= bounds.top - 50 && y + height <= bounds.bottom + 50) {
+      return 'right';
+    }
+    // Check top edge - window's bottom edge near PDF viewer's top edge
+    if (Math.abs(y + height - bounds.top) <= DOCK_THRESHOLD && 
+        x >= bounds.left - 50 && x + width <= bounds.right + 50) {
+      return 'top';
+    }
+
+    return null;
+  };
 
   const handleMouseDown = (e) => {
     if (e.target.closest('.no-drag')) return;
@@ -54,6 +112,11 @@ const DraggableWindow = ({ title, children, onClose }) => {
       y: e.clientY - rect.top,
     });
     setIsDragging(true);
+    
+    // If docked, undock when starting to drag
+    if (docked) {
+      setDocked(null);
+    }
   };
 
   const handleResizeMouseDown = (e, direction) => {
@@ -106,7 +169,7 @@ const DraggableWindow = ({ title, children, onClose }) => {
 
         // Keep window within viewport
         const maxX = window.innerWidth - newWidth;
-        const maxY = window.innerHeight - 170;
+        const maxY = window.innerHeight - (HEADER_HEIGHT + FOOTER_HEIGHT);
 
         setSize({ width: newWidth, height: newHeight });
         setPosition({
@@ -117,14 +180,30 @@ const DraggableWindow = ({ title, children, onClose }) => {
         const newX = e.clientX - dragOffset.x;
         const newY = e.clientY - dragOffset.y;
 
-        // Keep window within viewport (account for header ~120px and footer ~50px)
-        const maxX = window.innerWidth - (isMinimized ? MIN_WIDTH : size.width);
-        const maxY = window.innerHeight - 170;
+        // Check for docking
+        const newDocked = checkDocking(newX, newY, size.width, size.height);
+        
+        if (newDocked) {
+          setDocked(newDocked);
+          // Position window at the edge
+          const bounds = getPdfViewerBounds();
+          if (newDocked === 'left') {
+            setPosition({ x: bounds.left, y: bounds.top });
+          } else if (newDocked === 'right') {
+            setPosition({ x: bounds.right - size.width, y: bounds.top });
+          } else if (newDocked === 'top') {
+            setPosition({ x: bounds.left, y: bounds.top });
+          }
+        } else {
+          // Keep window within viewport
+          const maxX = window.innerWidth - (isMinimized ? MIN_WIDTH : size.width);
+          const maxY = window.innerHeight - (HEADER_HEIGHT + FOOTER_HEIGHT);
 
-        setPosition({
-          x: Math.max(0, Math.min(newX, maxX)),
-          y: Math.max(0, Math.min(newY, maxY)),
-        });
+          setPosition({
+            x: Math.max(0, Math.min(newX, maxX)),
+            y: Math.max(0, Math.min(newY, maxY)),
+          });
+        }
       }
     };
 
@@ -143,7 +222,7 @@ const DraggableWindow = ({ title, children, onClose }) => {
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [isDragging, isResizing, resizeDirection, dragOffset, resizeStart, isMinimized, size.width]);
+  }, [isDragging, isResizing, resizeDirection, dragOffset, resizeStart, isMinimized, size, docked, pdfViewerRef]);
 
   const getResizeCursor = (direction) => {
     if (direction.includes('right') && direction.includes('bottom')) return 'nwse-resize';
@@ -155,6 +234,12 @@ const DraggableWindow = ({ title, children, onClose }) => {
     return 'default';
   };
 
+  // If docked, render as a panel (handled by parent layout)
+  if (docked) {
+    return null; // Parent will render the docked panel
+  }
+
+  // Floating window
   return (
     <Paper
       ref={windowRef}
@@ -223,6 +308,7 @@ const DraggableWindow = ({ title, children, onClose }) => {
             overflow: 'auto',
             flex: 1,
             minHeight: 0,
+            maxHeight: '100%',
           }}
         >
           {children}
@@ -300,7 +386,7 @@ const DraggableWindow = ({ title, children, onClose }) => {
               },
             }}
           />
-          {/* Top-left corner */}
+          {/* Corners */}
           <Box
             onMouseDown={(e) => handleResizeMouseDown(e, 'top-left')}
             sx={{
@@ -311,13 +397,9 @@ const DraggableWindow = ({ title, children, onClose }) => {
               height: 12,
               cursor: 'nwse-resize',
               zIndex: 2,
-              '&:hover': {
-                backgroundColor: 'primary.main',
-                opacity: 0.5,
-              },
+              '&:hover': { backgroundColor: 'primary.main', opacity: 0.5 },
             }}
           />
-          {/* Top-right corner */}
           <Box
             onMouseDown={(e) => handleResizeMouseDown(e, 'top-right')}
             sx={{
@@ -328,13 +410,9 @@ const DraggableWindow = ({ title, children, onClose }) => {
               height: 12,
               cursor: 'nesw-resize',
               zIndex: 2,
-              '&:hover': {
-                backgroundColor: 'primary.main',
-                opacity: 0.5,
-              },
+              '&:hover': { backgroundColor: 'primary.main', opacity: 0.5 },
             }}
           />
-          {/* Bottom-left corner */}
           <Box
             onMouseDown={(e) => handleResizeMouseDown(e, 'bottom-left')}
             sx={{
@@ -345,13 +423,9 @@ const DraggableWindow = ({ title, children, onClose }) => {
               height: 12,
               cursor: 'nesw-resize',
               zIndex: 2,
-              '&:hover': {
-                backgroundColor: 'primary.main',
-                opacity: 0.5,
-              },
+              '&:hover': { backgroundColor: 'primary.main', opacity: 0.5 },
             }}
           />
-          {/* Bottom-right corner */}
           <Box
             onMouseDown={(e) => handleResizeMouseDown(e, 'bottom-right')}
             sx={{
@@ -362,10 +436,7 @@ const DraggableWindow = ({ title, children, onClose }) => {
               height: 12,
               cursor: 'nwse-resize',
               zIndex: 2,
-              '&:hover': {
-                backgroundColor: 'primary.main',
-                opacity: 0.5,
-              },
+              '&:hover': { backgroundColor: 'primary.main', opacity: 0.5 },
             }}
           />
         </>
@@ -374,5 +445,5 @@ const DraggableWindow = ({ title, children, onClose }) => {
   );
 };
 
-export default DraggableWindow;
+export default DockableRubricWindow;
 

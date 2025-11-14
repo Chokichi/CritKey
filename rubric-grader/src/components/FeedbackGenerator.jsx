@@ -28,6 +28,7 @@ import {
 } from '@mui/icons-material';
 import { useHotkeys } from 'react-hotkeys-hook';
 import useRubricStore from '../store/rubricStore';
+import useCanvasStore from '../store/canvasStore';
 import { generateFeedbackText } from '../utils/csvParser';
 import { saveFeedbackToHistory, getFeedbackHistory } from '../utils/localStorage';
 
@@ -38,8 +39,10 @@ const FeedbackGenerator = () => {
   const [historyMenuAnchor, setHistoryMenuAnchor] = useState(null);
   const [feedbackHistory, setFeedbackHistory] = useState([]);
   const [snackbarOpen, setSnackbarOpen] = useState(false);
+  const [submittingToCanvas, setSubmittingToCanvas] = useState(false);
   
   const { currentRubric, getTotalPoints, resetGrading } = useRubricStore();
+  const { selectedSubmission, submitGrade, nextSubmission } = useCanvasStore();
 
   const loadFeedbackHistory = () => {
     setFeedbackHistory(getFeedbackHistory());
@@ -119,6 +122,34 @@ const FeedbackGenerator = () => {
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {
       console.error('Failed to copy:', err);
+    }
+  };
+
+  const handleSubmitToCanvas = async () => {
+    if (!selectedSubmission || !currentRubric) {
+      return;
+    }
+
+    setSubmittingToCanvas(true);
+    try {
+      const { earned, possible } = getTotalPoints();
+      const feedback = feedbackText || generateFeedbackText(currentRubric);
+      
+      await submitGrade(`${earned}/${possible}`, feedback);
+      
+      // Show success message
+      setSnackbarOpen(true);
+      
+      // Auto-advance to next submission after a short delay
+      setTimeout(() => {
+        nextSubmission();
+        resetGrading();
+      }, 1000);
+    } catch (error) {
+      console.error('Failed to submit to Canvas:', error);
+      alert(`Failed to submit grade to Canvas: ${error.message}`);
+    } finally {
+      setSubmittingToCanvas(false);
     }
   };
 
@@ -254,6 +285,9 @@ const FeedbackGenerator = () => {
       <Dialog
         open={open}
         onClose={handleClose}
+        PaperProps={{
+          sx: { zIndex: 1400 }
+        }}
         maxWidth="md"
         fullWidth
       >
@@ -293,13 +327,23 @@ const FeedbackGenerator = () => {
             Close
           </Button>
           <Button
-            variant="contained"
+            variant="outlined"
             startIcon={copied ? <CheckIcon /> : <CopyIcon />}
             onClick={handleCopy}
             color={copied ? 'success' : 'primary'}
           >
             {copied ? 'Copied!' : 'Copy to Clipboard'}
           </Button>
+          {selectedSubmission && (
+            <Button
+              variant="contained"
+              onClick={handleSubmitToCanvas}
+              disabled={submittingToCanvas}
+              color="success"
+            >
+              {submittingToCanvas ? 'Submitting...' : 'Submit to Canvas'}
+            </Button>
+          )}
         </DialogActions>
       </Dialog>
       <Snackbar
