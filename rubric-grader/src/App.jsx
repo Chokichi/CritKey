@@ -1,8 +1,8 @@
 import { useEffect, useState, useRef } from 'react';
 import { useHotkeys } from 'react-hotkeys-hook';
-import { 
-  CssBaseline, 
-  ThemeProvider, 
+import {
+  CssBaseline,
+  ThemeProvider,
   createTheme,
   Box,
   Typography,
@@ -10,6 +10,7 @@ import {
   Stack,
   IconButton,
   Tooltip,
+  CircularProgress,
 } from '@mui/material';
 import { Keyboard as KeyboardIcon } from '@mui/icons-material';
 import useRubricStore from './store/rubricStore';
@@ -44,6 +45,7 @@ function App() {
   const selectedAssignment = useCanvasStore((state) => state.selectedAssignment);
   const submissions = useCanvasStore((state) => state.submissions);
   const submissionIndex = useCanvasStore((state) => state.submissionIndex);
+  const loadingSubmissions = useCanvasStore((state) => state.loadingSubmissions);
   const apiToken = useCanvasStore((state) => state.apiToken);
   const nextSubmission = useCanvasStore((state) => state.nextSubmission);
   const previousSubmission = useCanvasStore((state) => state.previousSubmission);
@@ -256,6 +258,23 @@ function App() {
                 hasNext={submissionIndex < submissions.length - 1}
                 hasPrevious={submissionIndex > 0}
               />
+            ) : loadingSubmissions && selectedAssignment ? (
+              <Box
+                sx={{
+                  height: '100%',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: 'grey.100',
+                  gap: 2,
+                }}
+              >
+                <CircularProgress size={48} />
+                <Typography variant="h6" color="text.secondary">
+                  Loading submissions for {selectedAssignment.name}...
+                </Typography>
+              </Box>
             ) : (
               <Box
                 sx={{

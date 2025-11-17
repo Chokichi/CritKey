@@ -86,6 +86,7 @@ const useCanvasStore = create((set, get) => ({
   assignments: [],
   allAssignments: [],
   assignmentGroups: [],
+  prefetchedAssignmentGroups: {}, // Map of courseId -> groups for prefetched data
   submissions: [], // Filtered/sorted submissions for display
   allSubmissions: [], // All submissions (unfiltered) for caching
   courseRubrics: [], // All rubrics available in the selected course
@@ -507,7 +508,45 @@ const useCanvasStore = create((set, get) => ({
           courses: requestUrl,
         },
       }));
-      
+
+      // Prefetch assignment groups for all courses in parallel
+      // This optimizes UX by avoiding separate fetches when courses are selected
+      if (dedupedCourses.length > 0) {
+        const groupsMap = {};
+        try {
+          await Promise.all(
+            dedupedCourses.map(async (course) => {
+              try {
+                const params = new URLSearchParams();
+                if (canvasApiBase) {
+                  params.append('canvasBase', canvasApiBase);
+                }
+                const url = params.toString()
+                  ? `${API_BASE}/api/courses/${course.id}/assignment-groups?${params.toString()}`
+                  : `${API_BASE}/api/courses/${course.id}/assignment-groups`;
+                const response = await fetch(url, {
+                  headers: {
+                    'Authorization': `Bearer ${apiToken}`,
+                    'Content-Type': 'application/json'
+                  }
+                });
+                if (response.ok) {
+                  const groups = await response.json();
+                  groupsMap[course.id] = dedupeById(Array.isArray(groups) ? groups : []);
+                }
+              } catch (err) {
+                // Silently fail for individual course groups - not critical
+                console.warn(`Failed to prefetch groups for course ${course.id}:`, err);
+              }
+            })
+          );
+          // Store prefetched groups
+          set({ prefetchedAssignmentGroups: groupsMap });
+        } catch (err) {
+          console.warn('Failed to prefetch assignment groups:', err);
+        }
+      }
+
       // Auto-select saved course if it exists
       const currentState = get();
       const savedCourseId = currentState.selectedCourseId || localStorage.getItem('canvas_selected_course_id');
@@ -562,9 +601,32 @@ const useCanvasStore = create((set, get) => ({
 
   // Fetch assignment groups for a course
   fetchAssignmentGroups: async (courseId) => {
-    const { apiToken, canvasApiBase } = get();
+    const { apiToken, canvasApiBase, prefetchedAssignmentGroups } = get();
     if (!apiToken) {
       set({ error: 'API token not set' });
+      return;
+    }
+
+    // Check if groups are already prefetched
+    if (prefetchedAssignmentGroups[courseId]) {
+      debugLog('[fetchAssignmentGroups] Using prefetched groups for course', courseId);
+      set({ assignmentGroups: prefetchedAssignmentGroups[courseId] });
+
+      // Still execute auto-selection logic below
+      const savedGroupId = localStorage.getItem('canvas_selected_assignment_group_id');
+      if (savedGroupId) {
+        if (savedGroupId === 'all') {
+          set({ selectedAssignmentGroup: 'all' });
+        } else {
+          const savedGroup = prefetchedAssignmentGroups[courseId].find(g => String(g.id) === String(savedGroupId));
+          if (savedGroup) {
+            set({ selectedAssignmentGroup: savedGroupId });
+            await get().fetchAssignments(courseId, savedGroupId);
+          } else {
+            set({ selectedAssignmentGroup: 'all' });
+          }
+        }
+      }
       return;
     }
 
