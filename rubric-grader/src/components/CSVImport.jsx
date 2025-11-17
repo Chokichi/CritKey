@@ -1,14 +1,14 @@
 import { useState, useRef } from 'react';
-import { 
-  Box, 
-  Button, 
-  Paper, 
-  Typography, 
+import {
+  Box,
+  Button,
+  Paper,
+  Typography,
   CircularProgress,
   Alert,
 } from '@mui/material';
-import { Upload as UploadIcon } from '@mui/icons-material';
-import { parseCanvasRubricCSV } from '../utils/csvParser';
+import { Upload as UploadIcon, Download as DownloadIcon } from '@mui/icons-material';
+import { parseCanvasRubricCSV, generateTemplateCSV } from '../utils/csvParser';
 import useRubricStore from '../store/rubricStore';
 
 const CSVImport = () => {
@@ -75,6 +75,21 @@ const CSVImport = () => {
     fileInputRef.current?.click();
   };
 
+  const handleDownloadTemplate = () => {
+    const csvContent = generateTemplateCSV();
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+
+    link.setAttribute('href', url);
+    link.setAttribute('download', 'rubric-template.csv');
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <Box>
       <Paper
@@ -130,6 +145,17 @@ const CSVImport = () => {
           Rubric imported successfully!
         </Alert>
       )}
+
+      <Box sx={{ mt: 2, textAlign: 'center' }}>
+        <Button
+          variant="outlined"
+          startIcon={<DownloadIcon />}
+          onClick={handleDownloadTemplate}
+          size="small"
+        >
+          Download Template CSV
+        </Button>
+      </Box>
     </Box>
   );
 };

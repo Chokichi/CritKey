@@ -246,6 +246,7 @@ app.get('/api/courses/:courseId/assignments', [
     params.append('per_page', '100');
     params.append('only_published', 'true');
     params.append('include[]', 'submission_summary');
+    params.append('include[]', 'rubric'); // Include rubric data with assignments
     if (assignment_group_id) {
       params.append('assignment_group_id', assignment_group_id);
     }
@@ -257,6 +258,7 @@ app.get('/api/courses/:courseId/assignments', [
       {},
       canvasBase || CANVAS_API_BASE
     );
+
     res.set('X-Canvas-Request-Url', requestUrl);
     res.json(data);
   } catch (error) {
@@ -460,6 +462,67 @@ app.get('/api/courses/:courseId/assignment-groups', [
     console.error('Error in /api/courses/:courseId/assignment-groups:', error.message);
     const status = error.status || 500;
     const message = error.status === 401 ? 'Authorization required' : 'Failed to fetch assignment groups';
+    res.status(status).json({ error: message });
+  }
+});
+
+// Get all rubrics for a course
+app.get('/api/courses/:courseId/rubrics', [
+  param('courseId').isNumeric(),
+  query('canvasBase').optional().isURL(),
+  handleValidationErrors
+], async (req, res) => {
+  try {
+    const { courseId } = req.params;
+    const apiToken = req.apiToken; // From Authorization header
+    const { canvasBase } = req.query;
+    if (!apiToken) {
+      return res.status(401).json({ error: 'Authorization required' });
+    }
+
+    const { data, requestUrl } = await canvasRequestAllPages(
+      `/courses/${courseId}/rubrics?per_page=100&include[]=associations`,
+      apiToken,
+      {},
+      canvasBase || CANVAS_API_BASE
+    );
+    res.set('X-Canvas-Request-Url', requestUrl);
+    res.json(data);
+  } catch (error) {
+    console.error('Error in /api/courses/:courseId/rubrics:', error.message);
+    const status = error.status || 500;
+    const message = error.status === 401 ? 'Authorization required' : 'Failed to fetch rubrics';
+    res.status(status).json({ error: message });
+  }
+});
+
+// Get a specific rubric by ID
+app.get('/api/courses/:courseId/rubrics/:rubricId', [
+  param('courseId').isNumeric(),
+  param('rubricId').isNumeric(),
+  query('canvasBase').optional().isURL(),
+  handleValidationErrors
+], async (req, res) => {
+  try {
+    const { courseId, rubricId } = req.params;
+    const apiToken = req.apiToken; // From Authorization header
+    const { canvasBase } = req.query;
+    if (!apiToken) {
+      return res.status(401).json({ error: 'Authorization required' });
+    }
+
+    const { data, requestUrl } = await canvasRequest(
+      `/courses/${courseId}/rubrics/${rubricId}?include[]=associations`,
+      apiToken,
+      {},
+      canvasBase || CANVAS_API_BASE
+    );
+    res.set('X-Canvas-Request-Url', requestUrl);
+    res.json(data);
+  } catch (error) {
+    console.error('Error in /api/courses/:courseId/rubrics/:rubricId:', error.message);
+    const status = error.status || 500;
+    const message = error.status === 401 ? 'Authorization required' : 'Failed to fetch rubric';
     res.status(status).json({ error: message });
   }
 });

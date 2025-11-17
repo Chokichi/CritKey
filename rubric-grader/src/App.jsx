@@ -41,6 +41,7 @@ function App() {
   const initialize = useRubricStore((state) => state.initialize);
   const initializeCanvas = useCanvasStore((state) => state.initialize);
   const selectedSubmission = useCanvasStore((state) => state.selectedSubmission);
+  const selectedAssignment = useCanvasStore((state) => state.selectedAssignment);
   const submissions = useCanvasStore((state) => state.submissions);
   const submissionIndex = useCanvasStore((state) => state.submissionIndex);
   const apiToken = useCanvasStore((state) => state.apiToken);

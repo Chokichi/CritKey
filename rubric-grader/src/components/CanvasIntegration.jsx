@@ -24,10 +24,13 @@ import {
   BugReport as BugReportIcon,
   Storage as StorageIcon,
   CloudDownload as CloudDownloadIcon,
+  ImportContacts as ImportContactsIcon,
 } from '@mui/icons-material';
 import useCanvasStore from '../store/canvasStore';
+import useRubricStore from '../store/rubricStore';
 import CourseDebugModal from './CourseDebugModal';
 import CacheManager from './CacheManager';
+import { convertCanvasRubricToInternal, isValidCanvasRubric, getCanvasRubricSummary } from '../utils/canvasRubricConverter';
 
 const CanvasIntegration = () => {
   const {
@@ -62,13 +65,22 @@ const CanvasIntegration = () => {
     cachingProgress,
     parallelDownloadLimit,
     setParallelDownloadLimit,
+    courseRubrics,
+    assignmentRubric,
+    loadingRubrics,
+    fetchCourseRubrics,
   } = useCanvasStore();
+
+  const { importRubric, currentCourse, availableRubrics } = useRubricStore();
 
   const [localApiToken, setLocalApiToken] = useState('');
   const [localApiBase, setLocalApiBase] = useState('https://canvas.instructure.com/api/v1');
   const [debugModalOpen, setDebugModalOpen] = useState(false);
   const [cacheManagerOpen, setCacheManagerOpen] = useState(false);
   const [hasAutoConnected, setHasAutoConnected] = useState(false);
+  const [selectedCourseRubricId, setSelectedCourseRubricId] = useState('');
+  const [importSuccess, setImportSuccess] = useState(null);
+  const [importError, setImportError] = useState(null);
 
   useEffect(() => {
     initialize();
@@ -109,6 +121,99 @@ const CanvasIntegration = () => {
     const assignment = assignments.find(a => a.id === assignmentId);
     if (assignment) {
       selectAssignment(assignment);
+    }
+  };
+
+  // Fetch course rubrics when course is selected
+  useEffect(() => {
+    if (selectedCourse && apiToken) {
+      fetchCourseRubrics();
+    }
+  }, [selectedCourse, apiToken, fetchCourseRubrics]);
+
+  // Clear rubric selection when course changes
+  useEffect(() => {
+    setSelectedCourseRubricId('');
+  }, [selectedCourse]);
+
+  const handleImportAssignmentRubric = async () => {
+    if (!assignmentRubric || !currentCourse) {
+      setImportError('Cannot import rubric: missing assignment rubric or course not selected');
+      return;
+    }
+
+    try {
+      setImportError(null);
+      setImportSuccess(null);
+
+      // Validate rubric
+      if (!isValidCanvasRubric(assignmentRubric)) {
+        throw new Error('Invalid Canvas rubric format');
+      }
+
+      // Check if rubric with same name already exists
+      const rubricName = assignmentRubric.title || 'Untitled Rubric';
+      const existingRubric = availableRubrics.find(r => r.name === rubricName);
+      if (existingRubric) {
+        throw new Error(`A rubric named "${rubricName}" already exists. Please rename or delete the existing rubric first.`);
+      }
+
+      // Convert Canvas rubric to CritKey format
+      const convertedRubric = convertCanvasRubricToInternal(assignmentRubric);
+
+      // Import into rubricStore
+      importRubric(convertedRubric);
+
+      setImportSuccess(`Rubric "${rubricName}" imported successfully! Select it from the rubric dropdown in Setup.`);
+
+      // Clear success message after 5 seconds
+      setTimeout(() => setImportSuccess(null), 5000);
+    } catch (error) {
+      setImportError(error.message || 'Failed to import rubric');
+    }
+  };
+
+  const handleImportCourseRubric = async () => {
+    if (!selectedCourseRubricId || !currentCourse) {
+      setImportError('Please select a rubric to import and ensure a course is selected');
+      return;
+    }
+
+    try {
+      setImportError(null);
+      setImportSuccess(null);
+
+      // Find selected rubric
+      const canvasRubric = courseRubrics.find(r => String(r.id) === String(selectedCourseRubricId));
+      if (!canvasRubric) {
+        throw new Error('Selected rubric not found');
+      }
+
+      // Validate rubric
+      if (!isValidCanvasRubric(canvasRubric)) {
+        throw new Error('Invalid Canvas rubric format');
+      }
+
+      // Check if rubric with same name already exists
+      const rubricName = canvasRubric.title || 'Untitled Rubric';
+      const existingRubric = availableRubrics.find(r => r.name === rubricName);
+      if (existingRubric) {
+        throw new Error(`A rubric named "${rubricName}" already exists. Please rename or delete the existing rubric first.`);
+      }
+
+      // Convert Canvas rubric to CritKey format
+      const convertedRubric = convertCanvasRubricToInternal(canvasRubric);
+
+      // Import into rubricStore
+      importRubric(convertedRubric);
+
+      setImportSuccess(`Rubric "${rubricName}" imported successfully! Select it from the rubric dropdown in Setup.`);
+      setSelectedCourseRubricId(''); // Reset selection
+
+      // Clear success message after 5 seconds
+      setTimeout(() => setImportSuccess(null), 5000);
+    } catch (error) {
+      setImportError(error.message || 'Failed to import rubric');
     }
   };
 
@@ -324,7 +429,7 @@ const CanvasIntegration = () => {
                       </Typography>
                       {assignment.points_possible !== null && assignment.points_possible !== undefined && (
                         <Typography variant="caption" color="text.secondary" sx={{ ml: 2 }}>
-                          {Number.isInteger(assignment.points_possible) 
+                          {Number.isInteger(assignment.points_possible)
                             ? `${assignment.points_possible} pts`
                             : `${Number(assignment.points_possible).toFixed(1)} pts`}
                         </Typography>
@@ -335,6 +440,111 @@ const CanvasIntegration = () => {
               )}
             </Select>
           </FormControl>
+        )}
+
+        {/* Rubric Import Section */}
+        {selectedCourse && (
+          <>
+            <Divider sx={{ my: 2 }} />
+            <Typography variant="subtitle2" sx={{ mb: 1 }}>
+              Import Rubric from Canvas
+            </Typography>
+
+            {!currentCourse && (
+              <Alert severity="info" sx={{ mb: 2 }}>
+                Please select a course in the <strong>Setup</strong> panel above before importing rubrics.
+              </Alert>
+            )}
+
+            {importSuccess && (
+              <Alert severity="success" sx={{ mb: 2 }} onClose={() => setImportSuccess(null)}>
+                {importSuccess}
+              </Alert>
+            )}
+
+            {importError && (
+              <Alert severity="error" sx={{ mb: 2 }} onClose={() => setImportError(null)}>
+                {importError}
+              </Alert>
+            )}
+
+            {/* Assignment Rubric Section */}
+            {selectedAssignment && assignmentRubric && isValidCanvasRubric(assignmentRubric) && (
+              <Box sx={{ mb: 2, p: 2, backgroundColor: 'rgba(25, 118, 210, 0.08)', borderRadius: 1 }}>
+                <Typography variant="body2" fontWeight="bold" gutterBottom>
+                  This assignment has a rubric
+                </Typography>
+                <Typography variant="body2" color="text.secondary" gutterBottom>
+                  {getCanvasRubricSummary(assignmentRubric).name}
+                  {getCanvasRubricSummary(assignmentRubric).pointsPossible !== null &&
+                    ` (${getCanvasRubricSummary(assignmentRubric).pointsPossible} pts)`}
+                </Typography>
+                <Typography variant="caption" color="text.secondary" display="block" gutterBottom>
+                  {getCanvasRubricSummary(assignmentRubric).criteriaCount} criteria
+                </Typography>
+                <Button
+                  variant="contained"
+                  size="small"
+                  startIcon={<ImportContactsIcon />}
+                  onClick={handleImportAssignmentRubric}
+                  disabled={!currentCourse}
+                  fullWidth
+                  sx={{ mt: 1 }}
+                >
+                  Import Assignment Rubric
+                </Button>
+              </Box>
+            )}
+
+            {/* Course Rubrics Section */}
+            {loadingRubrics ? (
+              <Box sx={{ display: 'flex', justifyContent: 'center', p: 2 }}>
+                <CircularProgress size={24} />
+              </Box>
+            ) : courseRubrics.length > 0 ? (
+              <Stack spacing={2}>
+                <FormControl fullWidth size="small">
+                  <InputLabel>Select Course Rubric</InputLabel>
+                  <Select
+                    value={selectedCourseRubricId}
+                    onChange={(e) => setSelectedCourseRubricId(e.target.value)}
+                    label="Select Course Rubric"
+                  >
+                    {courseRubrics.filter(isValidCanvasRubric).map((rubric) => {
+                      const summary = getCanvasRubricSummary(rubric);
+                      return (
+                        <MenuItem key={rubric.id} value={rubric.id}>
+                          <Box>
+                            <Typography variant="body2" fontWeight="bold">
+                              {summary.name}
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              {summary.pointsPossible !== null && `${summary.pointsPossible} pts • `}
+                              {summary.criteriaCount} criteria
+                            </Typography>
+                          </Box>
+                        </MenuItem>
+                      );
+                    })}
+                  </Select>
+                </FormControl>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  startIcon={<ImportContactsIcon />}
+                  onClick={handleImportCourseRubric}
+                  disabled={!selectedCourseRubricId || !currentCourse}
+                  fullWidth
+                >
+                  Import Selected Rubric
+                </Button>
+              </Stack>
+            ) : (
+              <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
+                No rubrics found in this course
+              </Typography>
+            )}
+          </>
         )}
 
         {/* Submission Info */}

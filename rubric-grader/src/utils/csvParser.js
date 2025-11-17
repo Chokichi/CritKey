@@ -159,6 +159,74 @@ export const generateFeedbackText = (rubric) => {
 };
 
 /**
+ * Generate a sample Canvas rubric CSV template
+ * @returns {string} CSV template string
+ */
+export const generateTemplateCSV = () => {
+  const templateRubric = {
+    name: 'Sample Rubric',
+    criteria: [
+      {
+        name: 'Content Quality',
+        description: 'Quality and accuracy of content',
+        enableRange: '',
+        levels: [
+          {
+            name: 'Excellent',
+            description: 'Content is thorough, accurate, and well-researched',
+            points: 10,
+          },
+          {
+            name: 'Good',
+            description: 'Content is mostly accurate with minor gaps',
+            points: 7,
+          },
+          {
+            name: 'Needs Improvement',
+            description: 'Content has significant gaps or inaccuracies',
+            points: 4,
+          },
+          {
+            name: 'Poor',
+            description: 'Content is incomplete or mostly inaccurate',
+            points: 0,
+          },
+        ],
+      },
+      {
+        name: 'Organization',
+        description: 'Structure and logical flow of work',
+        enableRange: '',
+        levels: [
+          {
+            name: 'Excellent',
+            description: 'Well-organized with clear logical flow',
+            points: 10,
+          },
+          {
+            name: 'Good',
+            description: 'Mostly organized with some minor issues',
+            points: 7,
+          },
+          {
+            name: 'Needs Improvement',
+            description: 'Organization is unclear or confusing',
+            points: 4,
+          },
+          {
+            name: 'Poor',
+            description: 'Lacks organization and structure',
+            points: 0,
+          },
+        ],
+      },
+    ],
+  };
+
+  return generateCanvasCSV([templateRubric]);
+};
+
+/**
  * Generate Canvas-compatible CSV from one or more rubrics
  * @param {Array<Object>} rubrics - Array of rubric objects
  * @returns {string} CSV string

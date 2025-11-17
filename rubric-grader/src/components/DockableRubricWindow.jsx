@@ -10,18 +10,65 @@ const FOOTER_HEIGHT = 50;
 const DockableRubricWindow = ({ title, children, onClose, onDockChange, pdfViewerRef }) => {
   // Load saved state
   const savedState = getRubricWindowState();
+
+  // Validate position is within screen bounds
+  const validatePosition = (pos, windowSize, screenWidth, screenHeight) => {
+    const maxX = screenWidth - windowSize.width;
+    const maxY = screenHeight - (HEADER_HEIGHT + FOOTER_HEIGHT);
+
+    // Check if window is significantly off-screen (more than 50px off)
+    const isOffScreenRight = pos.x > screenWidth - 50;
+    const isOffScreenBottom = pos.y > screenHeight - 50;
+    const isOffScreenLeft = pos.x + windowSize.width < 50;
+    const isOffScreenTop = pos.y < -50;
+
+    if (isOffScreenRight || isOffScreenBottom || isOffScreenLeft || isOffScreenTop) {
+      // Window is off-screen, return null to trigger auto-dock
+      return null;
+    }
+
+    // Window is partially visible, constrain it within bounds
+    return {
+      x: Math.max(0, Math.min(pos.x, maxX)),
+      y: Math.max(0, Math.min(pos.y, maxY)),
+    };
+  };
+
   const getInitialState = () => {
+    const defaultSize = { width: 600, height: 600 };
+    const defaultPosition = { x: Math.max(50, window.innerWidth - 650), y: 100 };
+
     if (savedState) {
+      const savedSize = savedState.size || defaultSize;
+      const savedPosition = savedState.position || defaultPosition;
+
+      // Validate the saved position is within screen bounds
+      const validatedPosition = validatePosition(
+        savedPosition,
+        savedSize,
+        window.innerWidth,
+        window.innerHeight
+      );
+
+      // If position is off-screen, auto-dock to right
+      if (!validatedPosition) {
+        return {
+          docked: 'right',
+          position: defaultPosition,
+          size: savedSize,
+        };
+      }
+
       return {
         docked: savedState.docked || null,
-        position: savedState.position || { x: Math.max(50, window.innerWidth - 650), y: 100 },
-        size: savedState.size || { width: 600, height: 600 },
+        position: validatedPosition,
+        size: savedSize,
       };
     }
     return {
       docked: null,
-      position: { x: Math.max(50, window.innerWidth - 650), y: 100 },
-      size: { width: 600, height: 600 },
+      position: defaultPosition,
+      size: defaultSize,
     };
   };
 
@@ -59,6 +106,33 @@ const DockableRubricWindow = ({ title, children, onClose, onDockChange, pdfViewe
       onDockChange(docked);
     }
   }, [docked, onDockChange]);
+
+  // Handle window resize - check if rubric is now off-screen
+  useEffect(() => {
+    const handleResize = () => {
+      if (docked) return; // Don't adjust if docked
+
+      const validatedPosition = validatePosition(
+        position,
+        size,
+        window.innerWidth,
+        window.innerHeight
+      );
+
+      // If window is off-screen after resize, auto-dock to right
+      if (!validatedPosition) {
+        console.log('[Rubric Window] Window is off-screen after resize, auto-docking to right');
+        setDocked('right');
+      } else if (validatedPosition.x !== position.x || validatedPosition.y !== position.y) {
+        // Window is partially off-screen, adjust position
+        console.log('[Rubric Window] Adjusting position to stay on screen');
+        setPosition(validatedPosition);
+      }
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [position, size, docked]);
 
   // Get PDF viewer bounds for docking detection
   const getPdfViewerBounds = () => {
