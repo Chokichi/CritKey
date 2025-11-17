@@ -580,42 +580,8 @@ const RubricDisplay = () => {
     [currentCriterionIndex, commentFocused, criterion, canUseHotkeys, hotkeys.selectLevel9]
   );
 
-  // Navigation hotkeys
-  useHotkeys(
-    hotkeys.nextCriterion,
-    (event) => {
-      if (event?.key === 'ArrowRight') {
-        event.preventDefault();
-      }
-      if (canUseHotkeys) goToNextCriterion();
-    },
-    { enabled: canUseHotkeys },
-    [commentFocused, canUseHotkeys, hotkeys.nextCriterion]
-  );
-
-  useHotkeys(
-    hotkeys.previousCriterion,
-    (event) => {
-      if (event?.key === 'ArrowLeft') {
-        event.preventDefault();
-      }
-      if (canUseHotkeys) goToPreviousCriterion();
-    },
-    { enabled: canUseHotkeys },
-    [commentFocused, canUseHotkeys, hotkeys.previousCriterion]
-  );
-
-  useHotkeys(
-    hotkeys.nextCriterionSpace,
-    (event) => {
-      event.preventDefault();
-      if (!autoAdvance && canUseHotkeys) {
-        goToNextCriterion();
-      }
-    },
-    { enabled: !autoAdvance && canUseHotkeys },
-    [autoAdvance, canUseHotkeys, hotkeys.nextCriterionSpace]
-  );
+  // Note: Navigation hotkeys (N/P/arrows/space) are now handled in App.jsx
+  // so they work even when the rubric is collapsed
 
   // Focus comment hotkey
   useHotkeys(

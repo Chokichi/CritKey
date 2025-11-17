@@ -196,6 +196,14 @@ const FeedbackGenerator = () => {
     }
   }, [currentRubric, hotkeys.resetRubric]);
 
+  // Stage grade hotkey
+  useHotkeys(hotkeys.stageGrade, (e) => {
+    if (currentRubric && selectedSubmission && !submittingToCanvas && !open) {
+      e.preventDefault();
+      handleSubmitToCanvas();
+    }
+  }, { enabled: !submittingToCanvas && !open }, [currentRubric, selectedSubmission, submittingToCanvas, open, hotkeys.stageGrade]);
+
   if (!currentRubric) {
     return null;
   }
@@ -256,7 +264,7 @@ const FeedbackGenerator = () => {
               fullWidth
               size="large"
             >
-              {submittingToCanvas ? 'Staging...' : 'Stage Grade'}
+              {submittingToCanvas ? 'Staging...' : 'Stage Grade (S)'}
             </Button>
           )}
         </Stack>

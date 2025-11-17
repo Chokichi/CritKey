@@ -40,6 +40,12 @@ const theme = createTheme({
 
 function App() {
   const initialize = useRubricStore((state) => state.initialize);
+  const currentRubric = useRubricStore((state) => state.currentRubric);
+  const currentCriterionIndex = useRubricStore((state) => state.currentCriterionIndex);
+  const getTotalPoints = useRubricStore((state) => state.getTotalPoints);
+  const goToNextCriterion = useRubricStore((state) => state.goToNextCriterion);
+  const goToPreviousCriterion = useRubricStore((state) => state.goToPreviousCriterion);
+  const autoAdvance = useRubricStore((state) => state.autoAdvance);
   const initializeCanvas = useCanvasStore((state) => state.initialize);
   const selectedSubmission = useCanvasStore((state) => state.selectedSubmission);
   const selectedAssignment = useCanvasStore((state) => state.selectedAssignment);
@@ -132,6 +138,38 @@ function App() {
   
   const pdfUrl = getPdfUrl(selectedSubmission);
 
+  // Get current criterion info for mini view
+  const getCriterionInfo = () => {
+    if (!currentRubric || !currentRubric.criteria) return null;
+
+    const criterion = currentRubric.criteria[currentCriterionIndex];
+    if (!criterion) return null;
+
+    // Get earned points for current criterion
+    const earnedPoints = criterion.selectedLevel !== null && criterion.selectedLevel !== undefined
+      ? criterion.levels[criterion.selectedLevel]?.points || 0
+      : 0;
+
+    // Get max possible points for current criterion
+    const possiblePoints = criterion.levels && criterion.levels.length > 0
+      ? Math.max(...criterion.levels.map(l => Number(l.points) || 0))
+      : 0;
+
+    // Get total points for entire rubric
+    const totalPoints = getTotalPoints();
+
+    return {
+      currentIndex: currentCriterionIndex,
+      total: currentRubric.criteria.length,
+      earned: earnedPoints,
+      possible: possiblePoints,
+      totalEarned: totalPoints.earned,
+      totalPossible: totalPoints.possible,
+    };
+  };
+
+  const criterionInfo = getCriterionInfo();
+
   const hotkeys = useHotkeyConfig();
 
   // Hotkeys for submission navigation
@@ -148,6 +186,40 @@ function App() {
       previousSubmission();
     }
   }, [submissionIndex, previousSubmission, hotkeys.previousSubmission]);
+
+  // Hotkeys for criterion navigation (work even when rubric is collapsed)
+  useHotkeys(hotkeys.nextCriterion, (e) => {
+    // Only prevent default for arrow keys
+    if (e?.key === 'ArrowRight') {
+      e.preventDefault();
+    }
+    if (currentRubric) {
+      const totalCriteria = currentRubric.criteria?.length || 0;
+      if (currentCriterionIndex < totalCriteria - 1) {
+        goToNextCriterion();
+      }
+    }
+  }, { enableOnFormTags: false }, [currentRubric, currentCriterionIndex, goToNextCriterion, hotkeys.nextCriterion]);
+
+  useHotkeys(hotkeys.previousCriterion, (e) => {
+    // Only prevent default for arrow keys
+    if (e?.key === 'ArrowLeft') {
+      e.preventDefault();
+    }
+    if (currentRubric && currentCriterionIndex > 0) {
+      goToPreviousCriterion();
+    }
+  }, { enableOnFormTags: false }, [currentRubric, currentCriterionIndex, goToPreviousCriterion, hotkeys.previousCriterion]);
+
+  useHotkeys(hotkeys.nextCriterionSpace, (e) => {
+    e.preventDefault();
+    if (!autoAdvance && currentRubric) {
+      const totalCriteria = currentRubric.criteria?.length || 0;
+      if (currentCriterionIndex < totalCriteria - 1) {
+        goToNextCriterion();
+      }
+    }
+  }, { enabled: !autoAdvance, enableOnFormTags: false }, [autoAdvance, currentRubric, currentCriterionIndex, goToNextCriterion, hotkeys.nextCriterionSpace]);
 
   // Shortcuts modal hotkey
   useHotkeys(hotkeys.showShortcuts, (e) => {
@@ -228,6 +300,7 @@ function App() {
               onWidthChange={setRubricWidth}
               onHeightChange={setRubricHeight}
               onUndock={handleUndock}
+              criterionInfo={criterionInfo}
             >
               <TotalPoints />
               <RubricDisplay />
@@ -300,6 +373,7 @@ function App() {
                 onWidthChange={setRubricWidth}
                 onHeightChange={setRubricHeight}
                 onUndock={handleUndock}
+                criterionInfo={criterionInfo}
               >
                 <TotalPoints />
                 <RubricDisplay />
@@ -313,6 +387,7 @@ function App() {
                 title="Rubric Grader"
                 pdfViewerRef={pdfViewerRef}
                 onDockChange={setRubricDocked}
+                criterionInfo={criterionInfo}
               >
                 <TotalPoints />
                 <RubricDisplay />
@@ -330,6 +405,7 @@ function App() {
               onWidthChange={setRubricWidth}
               onHeightChange={setRubricHeight}
               onUndock={handleUndock}
+              criterionInfo={criterionInfo}
             >
               <TotalPoints />
               <RubricDisplay />

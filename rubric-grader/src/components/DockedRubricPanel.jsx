@@ -1,16 +1,23 @@
 import { useState, useRef, useEffect } from 'react';
 import { Paper, Box, Typography, Stack, IconButton } from '@mui/material';
-import { Launch as LaunchIcon } from '@mui/icons-material';
+import { Launch as LaunchIcon, Minimize } from '@mui/icons-material';
 
-const DockedRubricPanel = ({ 
-  docked, 
-  width, 
-  height, 
-  onWidthChange, 
-  onHeightChange, 
-  onUndock, 
-  children 
+const formatPoints = (points) => {
+  const value = Number(points) || 0;
+  return Number.isInteger(value) ? value : value.toFixed(2);
+};
+
+const DockedRubricPanel = ({
+  docked,
+  width,
+  height,
+  onWidthChange,
+  onHeightChange,
+  onUndock,
+  children,
+  criterionInfo
 }) => {
+  const [isMinimized, setIsMinimized] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
   const [resizeStart, setResizeStart] = useState({ x: 0, y: 0, width: 0, height: 0 });
   const panelRef = useRef(null);
@@ -108,36 +115,54 @@ const DockedRubricPanel = ({
           justifyContent: 'space-between',
         }}
       >
-        <Typography variant="subtitle1" fontWeight="bold">
-          Rubric Grader
-        </Typography>
-        <IconButton
-          size="small"
-          onClick={(e) => {
-            e.stopPropagation();
-            if (onUndock) {
-              onUndock();
-            }
-          }}
-          sx={{ color: 'inherit' }}
-          title="Undock"
-        >
-          <LaunchIcon />
-        </IconButton>
+        {isMinimized && criterionInfo ? (
+          <Typography variant="subtitle2" fontWeight="bold" sx={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            Criterion ({criterionInfo.currentIndex + 1}/{criterionInfo.total}) - {formatPoints(criterionInfo.earned)}/{formatPoints(criterionInfo.possible)}pts | Total: {formatPoints(criterionInfo.totalEarned)}/{formatPoints(criterionInfo.totalPossible)}
+          </Typography>
+        ) : (
+          <Typography variant="subtitle1" fontWeight="bold">
+            Rubric Grader
+          </Typography>
+        )}
+        <Stack direction="row" spacing={0.5}>
+          <IconButton
+            size="small"
+            onClick={() => setIsMinimized(!isMinimized)}
+            sx={{ color: 'inherit' }}
+            title={isMinimized ? 'Expand' : 'Collapse'}
+          >
+            <Minimize />
+          </IconButton>
+          <IconButton
+            size="small"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (onUndock) {
+                onUndock();
+              }
+            }}
+            sx={{ color: 'inherit' }}
+            title="Undock"
+          >
+            <LaunchIcon />
+          </IconButton>
+        </Stack>
       </Box>
 
       {/* Content */}
-      <Box 
-        sx={{ 
-          p: 2, 
-          overflow: 'auto', 
-          flex: 1, 
-          minHeight: 0,
-          maxHeight: '100%',
-        }}
-      >
-        {children}
-      </Box>
+      {!isMinimized && (
+        <Box
+          sx={{
+            p: 2,
+            overflow: 'auto',
+            flex: 1,
+            minHeight: 0,
+            maxHeight: '100%',
+          }}
+        >
+          {children}
+        </Box>
+      )}
 
       {/* Resize Handles */}
       {(docked === 'left' || docked === 'right') && (

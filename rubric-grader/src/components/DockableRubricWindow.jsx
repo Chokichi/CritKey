@@ -7,7 +7,12 @@ const DOCK_THRESHOLD = 50; // pixels from edge to trigger docking
 const HEADER_HEIGHT = 120;
 const FOOTER_HEIGHT = 50;
 
-const DockableRubricWindow = ({ title, children, onClose, onDockChange, pdfViewerRef }) => {
+const formatPoints = (points) => {
+  const value = Number(points) || 0;
+  return Number.isInteger(value) ? value : value.toFixed(2);
+};
+
+const DockableRubricWindow = ({ title, children, onClose, onDockChange, pdfViewerRef, criterionInfo }) => {
   // Load saved state
   const savedState = getRubricWindowState();
 
@@ -82,7 +87,7 @@ const DockableRubricWindow = ({ title, children, onClose, onDockChange, pdfViewe
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const [resizeStart, setResizeStart] = useState({ x: 0, y: 0, width: 0, height: 0, posX: 0, posY: 0 });
   const windowRef = useRef(null);
-  
+
   const MIN_WIDTH = 300;
   const MIN_HEIGHT = 200;
   
@@ -270,7 +275,8 @@ const DockableRubricWindow = ({ title, children, onClose, onDockChange, pdfViewe
           }
         } else {
           // Keep window within viewport
-          const maxX = window.innerWidth - (isMinimized ? MIN_WIDTH : size.width);
+          // When minimized, we don't know the exact width (it's auto), so just ensure it's visible
+          const maxX = isMinimized ? window.innerWidth - 100 : window.innerWidth - size.width;
           const maxY = window.innerHeight - (HEADER_HEIGHT + FOOTER_HEIGHT);
 
           setPosition({
@@ -322,7 +328,7 @@ const DockableRubricWindow = ({ title, children, onClose, onDockChange, pdfViewe
         position: 'fixed',
         left: position.x,
         top: position.y,
-        width: isMinimized ? MIN_WIDTH : size.width,
+        width: isMinimized ? 'auto' : size.width,
         height: isMinimized ? 'auto' : size.height,
         maxWidth: '90vw',
         maxHeight: '90vh',
@@ -331,7 +337,7 @@ const DockableRubricWindow = ({ title, children, onClose, onDockChange, pdfViewe
         flexDirection: 'column',
         zIndex: 1300,
         cursor: isDragging ? 'grabbing' : (isResizing ? getResizeCursor(resizeDirection) : 'default'),
-        transition: isMinimized ? 'width 0.2s ease' : (isResizing ? 'none' : 'none'),
+        transition: isMinimized ? 'none' : (isResizing ? 'none' : 'none'),
       }}
     >
       {/* Title Bar */}
@@ -348,9 +354,15 @@ const DockableRubricWindow = ({ title, children, onClose, onDockChange, pdfViewe
         <Stack direction="row" alignItems="center" justifyContent="space-between">
           <Stack direction="row" alignItems="center" spacing={1}>
             <DragIndicator />
-            <Typography variant="subtitle1" fontWeight="bold">
-              {title}
-            </Typography>
+            {isMinimized && criterionInfo ? (
+              <Typography variant="subtitle2" fontWeight="bold" sx={{ whiteSpace: 'nowrap' }}>
+                Criterion ({criterionInfo.currentIndex + 1}/{criterionInfo.total}) - {formatPoints(criterionInfo.earned)}/{formatPoints(criterionInfo.possible)}pts | Total: {formatPoints(criterionInfo.totalEarned)}/{formatPoints(criterionInfo.totalPossible)}
+              </Typography>
+            ) : (
+              <Typography variant="subtitle1" fontWeight="bold">
+                {title}
+              </Typography>
+            )}
           </Stack>
           <Stack direction="row" spacing={0.5} className="no-drag">
             <IconButton

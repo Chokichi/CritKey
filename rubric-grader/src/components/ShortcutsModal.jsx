@@ -157,6 +157,14 @@ const ShortcutsModal = ({ open, onClose }) => {
                   Reset rubric
                 </Typography>
               </Box>
+              <Box>
+                <Typography variant="body2" component="span" fontWeight="medium">
+                  {formatHotkeyDisplay(hotkeys.stageGrade)}
+                </Typography>
+                <Typography variant="body2" component="span" sx={{ ml: 1 }}>
+                  Stage grade and feedback for Canvas
+                </Typography>
+              </Box>
             </Stack>
           </Box>
         </Stack>

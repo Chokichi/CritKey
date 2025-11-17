@@ -33,7 +33,8 @@ export const DEFAULT_HOTKEYS = {
   // Actions
   generateFeedback: 'ctrl+enter, meta+enter',
   resetRubric: 'ctrl+r, meta+r',
-  
+  stageGrade: 's',
+
   // Help
   showShortcuts: '?',
 };
@@ -151,6 +152,7 @@ export const getHotkeyDescriptions = () => {
     previousSubmission: 'Navigate to previous submission',
     generateFeedback: 'Generate feedback and copy to clipboard',
     resetRubric: 'Reset all rubric selections',
+    stageGrade: 'Stage grade and feedback for Canvas submission',
     showShortcuts: 'Show keyboard shortcuts help',
   };
 };
