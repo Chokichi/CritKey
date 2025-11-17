@@ -11,6 +11,7 @@ const STORAGE_KEYS = {
   PDF_INITIAL_ZOOM: 'hotrubric_pdf_initial_zoom',
   PDF_GRID_MODE: 'hotrubric_pdf_grid_mode',
   PDF_GRID_COLUMNS: 'hotrubric_pdf_grid_columns',
+  PDF_PERSIST_ZOOM: 'hotrubric_pdf_persist_zoom',
   RUBRIC_SCORES: 'hotrubric_rubric_scores',
   STAGED_GRADES: 'hotrubric_staged_grades',
 };
@@ -280,6 +281,32 @@ export const savePdfGridColumns = (columns) => {
     localStorage.setItem(STORAGE_KEYS.PDF_GRID_COLUMNS, columns.toString());
   } catch (error) {
     console.error('Error saving PDF grid columns to localStorage:', error);
+  }
+};
+
+/**
+ * Get PDF persist zoom setting
+ * @returns {boolean} Whether to persist zoom across students (default: false)
+ */
+export const getPdfPersistZoom = () => {
+  try {
+    const data = localStorage.getItem(STORAGE_KEYS.PDF_PERSIST_ZOOM);
+    return data === 'true';
+  } catch (error) {
+    console.error('Error reading PDF persist zoom from localStorage:', error);
+    return false;
+  }
+};
+
+/**
+ * Save PDF persist zoom setting
+ * @param {boolean} enabled
+ */
+export const savePdfPersistZoom = (enabled) => {
+  try {
+    localStorage.setItem(STORAGE_KEYS.PDF_PERSIST_ZOOM, enabled.toString());
+  } catch (error) {
+    console.error('Error saving PDF persist zoom to localStorage:', error);
   }
 };
 

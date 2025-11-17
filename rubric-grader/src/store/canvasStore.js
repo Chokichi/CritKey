@@ -22,6 +22,16 @@ import {
 
 const API_BASE = 'http://localhost:3001';
 
+// Debug feature flag - set to true to enable debug logging
+const DEBUG = false;
+
+// Debug logging helper - only logs when DEBUG is true
+const debugLog = (...args) => {
+  if (DEBUG) {
+    console.log(...args);
+  }
+};
+
 // Helper function to provide user-friendly error messages
 const getErrorMessage = (error) => {
   // Detect connection errors (server not running)
@@ -69,6 +79,7 @@ const useCanvasStore = create((set, get) => ({
   selectedSubmission: null,
   submissionIndex: 0,
   selectedAssignmentGroup: 'all',
+  currentAssignmentRequestId: null, // Track in-flight assignment requests
   
   // Data
   courses: [],
@@ -77,6 +88,8 @@ const useCanvasStore = create((set, get) => ({
   assignmentGroups: [],
   submissions: [], // Filtered/sorted submissions for display
   allSubmissions: [], // All submissions (unfiltered) for caching
+  courseRubrics: [], // All rubrics available in the selected course
+  assignmentRubric: null, // Rubric attached to selected assignment (if any)
   
   // Meta
   lastRequestUrls: {
@@ -93,7 +106,7 @@ const useCanvasStore = create((set, get) => ({
   parallelDownloadLimit: 3, // 0 = no limit
   
   // Grading and sorting
-  sortBy: 'ungraded', // 'all' | 'graded' | 'ungraded'
+  sortBy: 'all', // 'all' | 'graded' | 'ungraded' - default to 'all' to show all submissions
   rubricScores: {}, // Map of assignmentId -> { submissionId -> scoreData }
   stagedGrades: {}, // Map of assignmentId -> { submissionId -> { grade, feedback } }
   
@@ -102,6 +115,7 @@ const useCanvasStore = create((set, get) => ({
   loadingAssignments: false,
   loadingSubmissions: false,
   pushingGrades: false,
+  loadingRubrics: false,
   
   // Error states
   error: null,
@@ -182,9 +196,15 @@ const useCanvasStore = create((set, get) => ({
   },
 
   // Cache all PDFs for current assignment (parallel downloads, 3 at a time)
-  cacheAllPdfs: async () => {
-    const { allSubmissions, selectedAssignment, apiToken } = get();
+  cacheAllPdfs: async (requestId) => {
+    const { allSubmissions, selectedAssignment, apiToken, currentAssignmentRequestId } = get();
     if (!allSubmissions.length || !selectedAssignment) {
+      return;
+    }
+
+    // Validate request is still current
+    if (currentAssignmentRequestId !== requestId) {
+      debugLog('[cacheAllPdfs] Request cancelled - assignment changed');
       return;
     }
 
@@ -243,10 +263,17 @@ const useCanvasStore = create((set, get) => ({
       const alreadyCached = allSubmissions.length - totalToCache;
       set({ cachingProgress: { current: alreadyCached, total: allSubmissions.length, isCaching: true } });
 
+      // Check again before starting cache downloads
+      if (get().currentAssignmentRequestId !== requestId) {
+        debugLog('[cacheAllPdfs] Request cancelled before downloads');
+        set({ cachingProgress: { current: 0, total: 0, isCaching: false } });
+        return;
+      }
+
       // Download in parallel batches
       const { parallelDownloadLimit } = get();
       const batchSize = parallelDownloadLimit === 0 ? pdfsToCache.length : parallelDownloadLimit;
-      
+
       if (batchSize >= pdfsToCache.length) {
         // Download all at once if no limit or limit >= total
         await Promise.all(
@@ -292,8 +319,15 @@ const useCanvasStore = create((set, get) => ({
       } else {
         // Download in batches
         for (let i = 0; i < pdfsToCache.length; i += batchSize) {
+          // Check if request is still current before each batch
+          if (get().currentAssignmentRequestId !== requestId) {
+            debugLog('[cacheAllPdfs] Request cancelled during batch download');
+            set({ cachingProgress: { current: 0, total: 0, isCaching: false } });
+            return;
+          }
+
           const batch = pdfsToCache.slice(i, i + batchSize);
-          
+
           await Promise.all(
             batch.map(async ({ url, submission }) => {
               try {
@@ -335,6 +369,13 @@ const useCanvasStore = create((set, get) => ({
             })
           );
         }
+      }
+
+      // Check again before updating cached assignments
+      if (get().currentAssignmentRequestId !== requestId) {
+        debugLog('[cacheAllPdfs] Request cancelled before updating cached assignments');
+        set({ cachingProgress: { current: 0, total: 0, isCaching: false } });
+        return;
       }
 
       // Update cached assignments list
@@ -682,8 +723,30 @@ const useCanvasStore = create((set, get) => ({
       return;
     }
 
-    set({ selectedAssignment: assignment, selectedSubmission: null, submissions: [], allSubmissions: [], submissionIndex: 0 });
-    await get().fetchSubmissions(selectedCourse.id, assignment.id);
+    // Generate unique request ID for this assignment selection
+    const requestId = `${assignment.id}_${Date.now()}`;
+
+    // Check if assignment has a rubric
+    const hasRubric = assignment && assignment.rubric && Array.isArray(assignment.rubric);
+    const assignmentRubric = hasRubric ? {
+      id: assignment.rubric_id || assignment.id,
+      title: assignment.rubric_settings?.title || `${assignment.name} Rubric`,
+      points_possible: assignment.rubric_settings?.points_possible || assignment.points_possible,
+      data: assignment.rubric,
+    } : null;
+
+    // Single atomic state update with request tracking
+    set({
+      selectedAssignment: assignment,
+      selectedSubmission: null,
+      submissions: [],
+      allSubmissions: [],
+      submissionIndex: 0,
+      assignmentRubric: assignmentRubric,
+      currentAssignmentRequestId: requestId, // Mark this request as current
+    });
+
+    await get().fetchSubmissions(selectedCourse.id, assignment.id, requestId);
   },
 
   // Change assignment group filter
@@ -705,7 +768,7 @@ const useCanvasStore = create((set, get) => ({
   },
 
   // Fetch submissions for an assignment
-  fetchSubmissions: async (courseId, assignmentId) => {
+  fetchSubmissions: async (courseId, assignmentId, requestId) => {
     const { apiToken, canvasApiBase } = get();
     if (!apiToken) {
       set({ error: 'API token not set' });
@@ -751,10 +814,31 @@ const useCanvasStore = create((set, get) => ({
         console.error('Failed to parse submissions JSON:', submissionsText.slice(0, 500));
         throw new Error('Canvas returned an unexpected response while loading submissions.');
       }
+      // Log raw submissions from API
+      debugLog('[Submission Debug] Raw submissions from Canvas API:', submissions.length);
+      debugLog('[Submission Debug] First submission sample:', submissions[0]);
+
       // Filter to only submissions with attachments (PDFs)
-      const submissionsWithFiles = submissions.filter(sub => 
-        sub.attachments && sub.attachments.length > 0
-      );
+      // Check both top-level attachments and submission_history
+      const submissionsWithFiles = submissions.filter(sub => {
+        // Check top-level attachments first
+        if (sub.attachments && sub.attachments.length > 0) {
+          return true;
+        }
+
+        // Fall back to submission_history if attachments not in main object
+        if (sub.submission_history && sub.submission_history.length > 0) {
+          for (const historyItem of sub.submission_history) {
+            if (historyItem.attachments && historyItem.attachments.length > 0) {
+              return true;
+            }
+          }
+        }
+
+        return false;
+      });
+
+      debugLog('[Submission Debug] After attachments filter:', submissionsWithFiles.length);
       
       // Load rubric scores and staged grades from localStorage
       const rubricScores = getRubricScores(assignmentId);
@@ -797,7 +881,23 @@ const useCanvasStore = create((set, get) => ({
       });
       
       const dedupedSubmissions = dedupeById(enrichedSubmissions);
-      
+
+      debugLog('[Submission Debug] After enrichment and deduplication:', dedupedSubmissions.length);
+      debugLog('[Submission Debug] Enriched submission sample (isGraded, canvasGrade):', {
+        isGraded: dedupedSubmissions[0]?.isGraded,
+        canvasGrade: dedupedSubmissions[0]?.canvasGrade,
+        canvasScore: dedupedSubmissions[0]?.canvasScore,
+        isAutoGradedZero: dedupedSubmissions[0]?.isAutoGradedZero
+      });
+      debugLog('[Submission Debug] Current sortBy value:', get().sortBy);
+
+      // Check if this request is still current before updating state
+      const currentState = get();
+      if (currentState.currentAssignmentRequestId !== requestId) {
+        debugLog('[fetchSubmissions] Request cancelled - assignment changed');
+        return; // Abort silently
+      }
+
       set((state) => ({
         allSubmissions: dedupedSubmissions, // Store unfiltered list for caching
         submissions: dedupedSubmissions, // Will be filtered by applySorting
@@ -809,35 +909,62 @@ const useCanvasStore = create((set, get) => ({
           submissions: requestUrl,
         },
       }));
-      
+
+      // Check again before applying sorting
+      if (get().currentAssignmentRequestId !== requestId) {
+        debugLog('[fetchSubmissions] Request cancelled before applySorting');
+        return;
+      }
+
       // Apply sorting (this will filter submissions for display)
       get().applySorting();
-      
+
+      // Check again before auto-selecting submission
+      if (get().currentAssignmentRequestId !== requestId) {
+        debugLog('[fetchSubmissions] Request cancelled before auto-select');
+        return;
+      }
+
       // Auto-select first submission if available
       const { submissions: sortedSubmissions, selectedSubmission } = get();
+      debugLog('[Submission Debug] After sorting, submissions count:', sortedSubmissions.length);
+      debugLog('[Submission Debug] Currently selected submission:', selectedSubmission?.user?.name || 'None');
+
       // Only auto-select if no submission is currently selected
       // or if the current selection is not in the filtered list
       if (sortedSubmissions.length > 0) {
         if (!selectedSubmission) {
           // No submission selected, select the first one
+          debugLog('[Submission Debug] No submission selected, auto-selecting first one');
           get().selectSubmissionByIndex(0);
+          debugLog('[Submission Debug] After auto-select, selectedSubmission:', get().selectedSubmission?.user?.name);
         } else {
           // Check if current selection is still in the filtered list
-          const currentIndex = sortedSubmissions.findIndex(sub => 
+          const currentIndex = sortedSubmissions.findIndex(sub =>
             String(sub.user_id || sub.id) === String(selectedSubmission.user_id || selectedSubmission.id)
           );
+          debugLog('[Submission Debug] Current selection index in filtered list:', currentIndex);
           if (currentIndex < 0) {
             // Current selection was filtered out, select the first one
+            debugLog('[Submission Debug] Current selection filtered out, selecting first one');
             get().selectSubmissionByIndex(0);
           }
         }
+      } else {
+        debugLog('[Submission Debug] No submissions available to select');
+      }
+
+      // Check again before caching PDFs
+      if (get().currentAssignmentRequestId !== requestId) {
+        debugLog('[fetchSubmissions] Request cancelled before cacheAllPdfs');
+        return;
       }
 
       // Cache all PDFs in background if offline mode is enabled
       // Use allSubmissions (unfiltered) for caching, not the filtered list
       const { offlineMode, allSubmissions } = get();
       if (offlineMode && allSubmissions.length > 0) {
-        get().cacheAllPdfs();
+        get().cacheAllPdfs(requestId);
       }
     } catch (error) {
       set({ error: getErrorMessage(error), loadingSubmissions: false });
@@ -882,16 +1009,34 @@ const useCanvasStore = create((set, get) => ({
     
     // Save to localStorage
     saveRubricScore(selectedAssignment.id, submissionId, scoreData);
-    
-    // Update in-memory state
+
+    // Stage the grade (don't push to Canvas yet)
+    stageGrade(selectedAssignment.id, submissionId, {
+      grade: score.toString(),
+      feedback,
+    });
+
+    // Single atomic state update for both rubric scores and staged grades
     set((state) => {
       const assignmentId = selectedAssignment.id;
+
+      // Update rubric scores
       const newRubricScores = { ...state.rubricScores };
       if (!newRubricScores[assignmentId]) {
         newRubricScores[assignmentId] = {};
       }
       newRubricScores[assignmentId][submissionId] = scoreData;
-      
+
+      // Update staged grades
+      const newStagedGrades = { ...state.stagedGrades };
+      if (!newStagedGrades[assignmentId]) {
+        newStagedGrades[assignmentId] = {};
+      }
+      newStagedGrades[assignmentId][submissionId] = {
+        grade: score.toString(),
+        feedback,
+      };
+
       // Update submission in both filtered and unfiltered lists
       const updateSubmission = (sub) => {
         if (String(sub.user_id || sub.id) === submissionId) {
@@ -903,36 +1048,16 @@ const useCanvasStore = create((set, get) => ({
         }
         return sub;
       };
-      
+
       const updatedSubmissions = state.submissions.map(updateSubmission);
       const updatedAllSubmissions = state.allSubmissions.map(updateSubmission);
-      
+
       return {
         rubricScores: newRubricScores,
+        stagedGrades: newStagedGrades,
         submissions: updatedSubmissions,
         allSubmissions: updatedAllSubmissions,
       };
-    });
-    
-    // Stage the grade (don't push to Canvas yet)
-    stageGrade(selectedAssignment.id, submissionId, {
-      grade: score.toString(),
-      feedback,
-    });
-    
-    // Update staged grades in state
-    set((state) => {
-      const assignmentId = selectedAssignment.id;
-      const newStagedGrades = { ...state.stagedGrades };
-      if (!newStagedGrades[assignmentId]) {
-        newStagedGrades[assignmentId] = {};
-      }
-      newStagedGrades[assignmentId][submissionId] = {
-        grade: score.toString(),
-        feedback,
-      };
-      
-      return { stagedGrades: newStagedGrades };
     });
     
     // Re-apply sorting to update the list
@@ -948,17 +1073,21 @@ const useCanvasStore = create((set, get) => ({
   // Apply sorting to submissions (for display only, doesn't affect allSubmissions)
   applySorting: () => {
     const { allSubmissions, sortBy } = get();
+    debugLog('[applySorting] Starting with allSubmissions:', allSubmissions.length, 'sortBy:', sortBy);
     if (!allSubmissions.length) return;
-    
+
     // Start with all submissions, then filter/sort for display
     let sorted = [...allSubmissions];
-    
+
     if (sortBy === 'ungraded') {
       // Show ungraded submissions (including auto-graded zeros)
+      debugLog('[applySorting] Filtering for ungraded. Sample sub.isGraded:', sorted[0]?.isGraded, 'sub.isAutoGradedZero:', sorted[0]?.isAutoGradedZero);
       sorted = sorted.filter(sub => !sub.isGraded || sub.isAutoGradedZero);
+      debugLog('[applySorting] After ungraded filter:', sorted.length);
     } else if (sortBy === 'graded') {
       // Show only fully graded (exclude auto-graded zeros)
       sorted = sorted.filter(sub => sub.isGraded && !sub.isAutoGradedZero);
+      debugLog('[applySorting] After graded filter:', sorted.length);
     }
     // 'all' shows everything, no filter needed
     
@@ -975,19 +1104,24 @@ const useCanvasStore = create((set, get) => ({
       const nameB = b.user?.name || b.user?.sortable_name || '';
       return nameA.localeCompare(nameB);
     });
-    
-    set({ submissions: sorted });
-    
-    // Update selected submission index if needed
+
+    // Calculate new submission index if needed
     const { selectedSubmission, submissionIndex } = get();
+    let newIndex = submissionIndex;
     if (selectedSubmission) {
-      const newIndex = sorted.findIndex(sub => 
+      const foundIndex = sorted.findIndex(sub =>
         String(sub.user_id || sub.id) === String(selectedSubmission.user_id || selectedSubmission.id)
       );
-      if (newIndex >= 0 && newIndex !== submissionIndex) {
-        set({ submissionIndex: newIndex });
+      if (foundIndex >= 0) {
+        newIndex = foundIndex;
       }
     }
+
+    // Single atomic state update for both submissions and index
+    set({
+      submissions: sorted,
+      submissionIndex: newIndex
+    });
   },
 
   // Push all staged grades to Canvas
@@ -1177,13 +1311,130 @@ const useCanvasStore = create((set, get) => ({
         }
         return sub;
       };
-      
+
       const updatedSubmissions = submissions.map(updateSubmission);
       const updatedAllSubmissions = allSubmissions.map(updateSubmission);
       set({ submissions: updatedSubmissions, allSubmissions: updatedAllSubmissions });
       return updatedSubmission;
     } catch (error) {
       set({ error: getErrorMessage(error) });
+      throw error;
+    }
+  },
+
+  // Fetch all rubrics for the selected course
+  fetchCourseRubrics: async () => {
+    const { selectedCourse, apiToken, canvasApiBase } = get();
+    if (!apiToken) {
+      set({ error: 'API token not set' });
+      return;
+    }
+    if (!selectedCourse) {
+      set({ error: 'No course selected' });
+      return;
+    }
+
+    set({ loadingRubrics: true, error: null });
+    try {
+      const params = new URLSearchParams();
+      if (canvasApiBase) {
+        params.append('canvasBase', canvasApiBase);
+      }
+      const url = params.toString()
+        ? `${API_BASE}/api/courses/${selectedCourse.id}/rubrics?${params.toString()}`
+        : `${API_BASE}/api/courses/${selectedCourse.id}/rubrics`;
+
+      const response = await fetch(url, {
+        headers: {
+          'Authorization': `Bearer ${apiToken}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => null);
+        let message = `Failed to fetch rubrics: ${response.status} ${response.statusText}`;
+        if (errorText) {
+          try {
+            const errorData = JSON.parse(errorText);
+            if (errorData?.error) {
+              message = errorData.error;
+            }
+          } catch (parseError) {
+            message = `${message} - ${errorText.substring(0, 200)}`;
+          }
+        }
+        throw new Error(message);
+      }
+
+      const rubricsText = await response.text();
+      let rubrics;
+      try {
+        rubrics = JSON.parse(rubricsText);
+      } catch (parseError) {
+        console.error('Failed to parse rubrics JSON:', rubricsText.slice(0, 500));
+        throw new Error('Canvas returned an unexpected response while loading rubrics.');
+      }
+
+      set({ courseRubrics: Array.isArray(rubrics) ? rubrics : [], loadingRubrics: false });
+    } catch (error) {
+      set({ error: getErrorMessage(error), loadingRubrics: false });
+    }
+  },
+
+  // Fetch a specific rubric by ID
+  fetchRubricById: async (rubricId) => {
+    const { selectedCourse, apiToken, canvasApiBase } = get();
+    if (!apiToken) {
+      throw new Error('API token not set');
+    }
+    if (!selectedCourse) {
+      throw new Error('No course selected');
+    }
+
+    try {
+      const params = new URLSearchParams();
+      if (canvasApiBase) {
+        params.append('canvasBase', canvasApiBase);
+      }
+      const url = params.toString()
+        ? `${API_BASE}/api/courses/${selectedCourse.id}/rubrics/${rubricId}?${params.toString()}`
+        : `${API_BASE}/api/courses/${selectedCourse.id}/rubrics/${rubricId}`;
+
+      const response = await fetch(url, {
+        headers: {
+          'Authorization': `Bearer ${apiToken}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => null);
+        let message = `Failed to fetch rubric: ${response.status} ${response.statusText}`;
+        if (errorText) {
+          try {
+            const errorData = JSON.parse(errorText);
+            if (errorData?.error) {
+              message = errorData.error;
+            }
+          } catch (parseError) {
+            message = `${message} - ${errorText.substring(0, 200)}`;
+          }
+        }
+        throw new Error(message);
+      }
+
+      const rubricText = await response.text();
+      let rubric;
+      try {
+        rubric = JSON.parse(rubricText);
+      } catch (parseError) {
+        console.error('Failed to parse rubric JSON:', rubricText.slice(0, 500));
+        throw new Error('Canvas returned an unexpected response while loading rubric.');
+      }
+
+      return rubric;
+    } catch (error) {
       throw error;
     }
   },

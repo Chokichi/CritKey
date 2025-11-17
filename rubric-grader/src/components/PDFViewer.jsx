@@ -25,7 +25,7 @@ import { GlobalWorkerOptions, getDocument } from 'pdfjs-dist';
 import pdfWorkerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import useCanvasStore from '../store/canvasStore';
 import { getCachedPdf } from '../utils/pdfCache';
-import { getPdfInitialZoom, savePdfInitialZoom, getPdfGridMode, savePdfGridMode, getPdfGridColumns, savePdfGridColumns } from '../utils/localStorage';
+import { getPdfInitialZoom, savePdfInitialZoom, getPdfGridMode, savePdfGridMode, getPdfGridColumns, savePdfGridColumns, getPdfPersistZoom, savePdfPersistZoom } from '../utils/localStorage';
 import StudentSelector from './StudentSelector';
 
 // Configure PDF.js worker to use local bundled file
@@ -40,6 +40,7 @@ const PDFViewer = ({ fileUrl, apiToken, onNext, onPrevious, hasNext, hasPrevious
   const [initialZoomPercent, setInitialZoomPercent] = useState(() => getPdfInitialZoom());
   const [gridMode, setGridMode] = useState(() => getPdfGridMode());
   const [gridColumns, setGridColumns] = useState(() => getPdfGridColumns());
+  const [persistZoom, setPersistZoom] = useState(() => getPdfPersistZoom());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [waitingForCache, setWaitingForCache] = useState(false);
@@ -51,11 +52,100 @@ const PDFViewer = ({ fileUrl, apiToken, onNext, onPrevious, hasNext, hasPrevious
   const pollingIntervalRef = useRef(null);
   const renderTaskRefs = useRef({});
   const loadingTaskRef = useRef(null);
+  const abortControllerRef = useRef(null);
   const currentFileUrlRef = useRef(null);
   const previousPdfDocRef = useRef(null);
   const userZoomRatioRef = useRef(1.0); // Track user's zoom relative to initial scale
   const previousInitialScaleRef = useRef(1.0);
   const pageRefs = useRef({});
+
+  // Helper function to wait for PDF cache using event-driven approach
+  const waitForPdfCache = async (fileUrl, assignmentId, submissionId, signal, maxWaitTime = 60000) => {
+    const startTime = Date.now();
+    const checkInterval = 500; // Check every 500ms
+
+    return new Promise((resolve, reject) => {
+      // If already aborted, reject immediately
+      if (signal.aborted) {
+        reject(new Error('Aborted'));
+        return;
+      }
+
+      // Set up abort listener
+      const abortHandler = () => {
+        cleanup();
+        reject(new Error('Aborted'));
+      };
+      signal.addEventListener('abort', abortHandler);
+
+      // Subscribe to caching progress changes
+      let checkTimer = null;
+      const unsubscribe = useCanvasStore.subscribe(
+        (state) => state.cachingProgress,
+        async (progress) => {
+          // Clear any pending check
+          if (checkTimer) {
+            clearTimeout(checkTimer);
+          }
+
+          // Check for cached PDF
+          const cachedBlob = await getCachedPdf(fileUrl || '', {
+            assignmentId,
+            submissionId,
+          });
+
+          if (cachedBlob) {
+            // Found cached PDF
+            cleanup();
+            resolve(cachedBlob);
+            return;
+          }
+
+          // Check timeout
+          if (Date.now() - startTime > maxWaitTime) {
+            cleanup();
+            reject(new Error('Timeout waiting for PDF cache'));
+            return;
+          }
+
+          // Check if caching completed but PDF not found
+          if (!progress.isCaching) {
+            cleanup();
+            reject(new Error('PDF not found after caching completed'));
+            return;
+          }
+
+          // Schedule next check
+          checkTimer = setTimeout(async () => {
+            // Trigger subscription callback by checking state
+            const currentProgress = useCanvasStore.getState().cachingProgress;
+            if (currentProgress.isCaching) {
+              // Re-check periodically
+              const cachedBlob = await getCachedPdf(fileUrl || '', {
+                assignmentId,
+                submissionId,
+              });
+              if (cachedBlob) {
+                cleanup();
+                resolve(cachedBlob);
+              }
+            }
+          }, checkInterval);
+        },
+        {
+          fireImmediately: true, // Check immediately on subscription
+        }
+      );
+
+      const cleanup = () => {
+        if (checkTimer) {
+          clearTimeout(checkTimer);
+        }
+        signal.removeEventListener('abort', abortHandler);
+        unsubscribe();
+      };
+    });
+  };
 
   // Load PDF document
   useEffect(() => {
@@ -63,7 +153,7 @@ const PDFViewer = ({ fileUrl, apiToken, onNext, onPrevious, hasNext, hasPrevious
     const submissionId = selectedSubmission ? String(selectedSubmission.user_id || selectedSubmission.id) : null;
     const assignmentId = selectedAssignment ? String(selectedAssignment.id) : null;
     const hasIds = assignmentId && submissionId;
-    
+
     if (!fileUrl && !hasIds) {
       // No fileUrl and no IDs - can't load anything
       setPdfDoc(null);
@@ -83,16 +173,20 @@ const PDFViewer = ({ fileUrl, apiToken, onNext, onPrevious, hasNext, hasPrevious
     setPdfLoaded(false);
     setLoading(true);
     setError(null);
-    
+
     // Update the ref to track current fileUrl
     currentFileUrlRef.current = fileUrl;
 
     const loadPdf = async () => {
+      // Create AbortController for this loading operation
+      const abortController = new AbortController();
+      abortControllerRef.current = abortController;
+
       // Store the current fileUrl to check if it changed during loading
       const currentFileUrl = fileUrl;
       const currentSubmissionId = selectedSubmission ? String(selectedSubmission.user_id || selectedSubmission.id) : null;
       const currentAssignmentId = selectedAssignment ? String(selectedAssignment.id) : null;
-      
+
       try {
         let pdfSource;
 
@@ -103,64 +197,33 @@ const PDFViewer = ({ fileUrl, apiToken, onNext, onPrevious, hasNext, hasPrevious
           assignmentId: currentAssignmentId,
           submissionId: currentSubmissionId,
         });
-        
+
         // If not found and we're in offline mode, wait for caching to complete
         if (!cachedBlob && offlineMode) {
           // Check if caching is in progress
           const currentProgress = useCanvasStore.getState().cachingProgress;
           if (currentProgress.isCaching) {
             setWaitingForCache(true);
-            // Poll for the PDF to be cached (check every 500ms)
-            const maxWaitTime = 60000; // 60 seconds max
-            const startTime = Date.now();
-            const pollInterval = 500;
-            
-            while (!cachedBlob && (Date.now() - startTime) < maxWaitTime) {
-              // Check if fileUrl or selection changed (user switched to different PDF)
-              const currentSubmissionIdCheck = selectedSubmission ? String(selectedSubmission.user_id || selectedSubmission.id) : null;
-              const currentAssignmentIdCheck = selectedAssignment ? String(selectedAssignment.id) : null;
-              if (currentFileUrl !== currentFileUrlRef.current ||
-                  currentSubmissionIdCheck !== currentSubmissionId ||
-                  currentAssignmentIdCheck !== currentAssignmentId) {
-                setWaitingForCache(false);
-                return; // Abort loading
+            try {
+              // Use event-driven approach instead of polling
+              cachedBlob = await waitForPdfCache(
+                currentFileUrl,
+                currentAssignmentId,
+                currentSubmissionId,
+                abortController.signal
+              );
+            } catch (err) {
+              setWaitingForCache(false);
+              if (err.message === 'Aborted') {
+                return; // Silently abort
               }
-              
-              await new Promise(resolve => setTimeout(resolve, pollInterval));
-              
-              // Try to get cached PDF (primary lookup by assignmentId + submissionId)
-              cachedBlob = await getCachedPdf(currentFileUrl || '', {
-                assignmentId: currentAssignmentId,
-                submissionId: currentSubmissionId,
-              });
-              
-              // Check current caching progress from store
-              const progress = useCanvasStore.getState().cachingProgress;
-              
-              // If we found the cached PDF, break immediately
-              if (cachedBlob) {
-                break;
-              }
-              
-              // If caching completed but PDF still not found, break
-              if (!progress.isCaching && !cachedBlob) {
-                break;
-              }
+              throw err; // Re-throw other errors
             }
-            
             setWaitingForCache(false);
           }
-          
+
           // If still not cached after waiting, show error
           if (!cachedBlob) {
-            // Check if fileUrl or selection changed before throwing error
-            const currentSubmissionIdCheck = selectedSubmission ? String(selectedSubmission.user_id || selectedSubmission.id) : null;
-            const currentAssignmentIdCheck = selectedAssignment ? String(selectedAssignment.id) : null;
-            if (currentFileUrl !== currentFileUrlRef.current ||
-                currentSubmissionIdCheck !== currentSubmissionId ||
-                currentAssignmentIdCheck !== currentAssignmentId) {
-              return; // Abort loading
-            }
             throw new Error('PDF not cached. Please wait for caching to complete or enable online mode.');
           }
         }
@@ -242,8 +305,13 @@ const PDFViewer = ({ fileUrl, apiToken, onNext, onPrevious, hasNext, hasPrevious
 
     loadPdf();
 
-    // Cleanup: clear any polling intervals and cancel renders/loads when component unmounts or fileUrl changes
+    // Cleanup: abort loading, clear polling intervals, and cancel renders/loads when component unmounts or fileUrl changes
     return () => {
+      // Abort any in-flight PDF cache waiting
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+        abortControllerRef.current = null;
+      }
       if (pollingIntervalRef.current) {
         clearInterval(pollingIntervalRef.current);
         pollingIntervalRef.current = null;
@@ -306,26 +374,28 @@ const PDFViewer = ({ fileUrl, apiToken, onNext, onPrevious, hasNext, hasPrevious
           // In grid mode, use user-specified number of columns and adjust scale to fit
           const pageWidth = viewport.width;
           const availableWidth = containerRect.width - 32; // Account for padding (16px padding on each side)
-          const gap = 16; // Gap between pages in grid
+          const gap = 8; // Gap between pages in grid (reduced from 16px)
           const columns = Math.max(1, gridColumns); // Ensure at least 1 column
-          
+
           // Calculate column width (accounting for gaps)
           const columnWidth = (availableWidth - (columns - 1) * gap) / columns;
-          
-          // Calculate scale so each page fits in its column
-          // Use the initial zoom percentage to determine the target page width within the column
-          const targetPageWidth = columnWidth * zoomFactor;
+
+          // Calculate scale so each page fills the column width
+          // In grid mode, use full column width (ignore initial zoom percentage)
+          const targetPageWidth = columnWidth;
           const fitScale = targetPageWidth / pageWidth;
           
           const isNewPdf = previousPdfDocRef.current !== pdfDoc;
           previousPdfDocRef.current = pdfDoc;
-          
-          if (isNewPdf) {
+
+          if (isNewPdf && !persistZoom) {
+            // New PDF and persist zoom is OFF - reset zoom to 100%
             setInitialScale(fitScale);
             setScale(fitScale);
             userZoomRatioRef.current = 1.0;
             previousInitialScaleRef.current = fitScale;
           } else {
+            // Either same PDF OR persist zoom is ON - maintain zoom ratio
             const prevInitial = previousInitialScaleRef.current || 1.0;
             const zoomRatio = userZoomRatioRef.current;
             setInitialScale(fitScale);
@@ -340,13 +410,15 @@ const PDFViewer = ({ fileUrl, apiToken, onNext, onPrevious, hasNext, hasPrevious
           
           const isNewPdf = previousPdfDocRef.current !== pdfDoc;
           previousPdfDocRef.current = pdfDoc;
-          
-          if (isNewPdf) {
+
+          if (isNewPdf && !persistZoom) {
+            // New PDF and persist zoom is OFF - reset zoom to 100%
             setInitialScale(fitScale);
             setScale(fitScale);
             userZoomRatioRef.current = 1.0;
             previousInitialScaleRef.current = fitScale;
           } else {
+            // Either same PDF OR persist zoom is ON - maintain zoom ratio
             const prevInitial = previousInitialScaleRef.current || 1.0;
             const zoomRatio = userZoomRatioRef.current;
             setInitialScale(fitScale);
@@ -373,7 +445,7 @@ const PDFViewer = ({ fileUrl, apiToken, onNext, onPrevious, hasNext, hasPrevious
     return () => {
       resizeObserver.disconnect();
     };
-  }, [pdfDoc, initialZoomPercent, gridMode, gridColumns]);
+  }, [pdfDoc, initialZoomPercent, gridMode, gridColumns, persistZoom]);
 
   // Render all PDF pages
   useEffect(() => {
@@ -483,6 +555,12 @@ const PDFViewer = ({ fileUrl, apiToken, onNext, onPrevious, hasNext, hasPrevious
     const enabled = event.target.checked;
     setGridMode(enabled);
     savePdfGridMode(enabled);
+  };
+
+  const handlePersistZoomChange = (event) => {
+    const enabled = event.target.checked;
+    setPersistZoom(enabled);
+    savePdfPersistZoom(enabled);
   };
 
   const handleGridColumnsChange = (event, newValue) => {
@@ -762,6 +840,23 @@ const PDFViewer = ({ fileUrl, apiToken, onNext, onPrevious, hasNext, hasPrevious
                 Display pages in a grid layout. Zoom will be adjusted to fit the specified number of pages across.
               </Typography>
             )}
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={persistZoom}
+                  onChange={handlePersistZoomChange}
+                  size="small"
+                />
+              }
+              label={
+                <Typography variant="body2">
+                  Persist Zoom
+                </Typography>
+              }
+            />
+            <Typography variant="caption" color="text.secondary">
+              Keep zoom level when switching between students
+            </Typography>
           </Stack>
         </Box>
       </Collapse>
@@ -782,7 +877,7 @@ const PDFViewer = ({ fileUrl, apiToken, onNext, onPrevious, hasNext, hasPrevious
           px: 2,
           pb: 2,
           backgroundColor: 'grey.200',
-          gap: gridMode ? 2 : 0,
+          gap: gridMode ? 1 : 0, // 1 = 8px gap in grid mode
           position: 'relative',
         }}
       >
@@ -799,7 +894,7 @@ const PDFViewer = ({ fileUrl, apiToken, onNext, onPrevious, hasNext, hasPrevious
                 display: 'flex',
                 justifyContent: 'center',
                 alignItems: 'flex-start',
-                width: gridMode ? `calc((100% - ${(gridColumns - 1) * 16}px) / ${gridColumns})` : '100%',
+                width: gridMode ? `calc((100% - ${(gridColumns - 1) * 8}px) / ${gridColumns})` : '100%',
                 flexShrink: 0,
                 '&:last-child': {
                   mb: 0,

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import {
   FormControl,
   InputLabel,
@@ -26,32 +26,35 @@ import {
 import useCanvasStore from '../store/canvasStore';
 
 const StudentSelector = () => {
-  const {
-    submissions,
-    allSubmissions,
-    selectedSubmission,
-    submissionIndex,
-    selectSubmissionByIndex,
-    sortBy,
-    setSortBy,
-    stagedGrades,
-    selectedAssignment,
-    pushAllStagedGrades,
-    pushingGrades,
-  } = useCanvasStore();
+  // Use granular selectors to minimize re-renders
+  const submissions = useCanvasStore((state) => state.submissions);
+  const allSubmissions = useCanvasStore((state) => state.allSubmissions);
+  const selectedSubmission = useCanvasStore((state) => state.selectedSubmission);
+  const submissionIndex = useCanvasStore((state) => state.submissionIndex);
+  const selectSubmissionByIndex = useCanvasStore((state) => state.selectSubmissionByIndex);
+  const sortBy = useCanvasStore((state) => state.sortBy);
+  const setSortBy = useCanvasStore((state) => state.setSortBy);
+  const stagedGrades = useCanvasStore((state) => state.stagedGrades);
+  const selectedAssignment = useCanvasStore((state) => state.selectedAssignment);
+  const pushAllStagedGrades = useCanvasStore((state) => state.pushAllStagedGrades);
+  const pushingGrades = useCanvasStore((state) => state.pushingGrades);
   
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
 
-  // Use allSubmissions for dropdown (shows all), but submissions for current selection
-  const dropdownSubmissions = allSubmissions.length > 0 ? allSubmissions : submissions;
-  
+  // Memoize expensive computations
+  const dropdownSubmissions = useMemo(() => {
+    return allSubmissions.length > 0 ? allSubmissions : submissions;
+  }, [allSubmissions, submissions]);
+
+  const stagedCount = useMemo(() => {
+    return selectedAssignment
+      ? Object.keys(stagedGrades[selectedAssignment.id] || {}).length
+      : 0;
+  }, [selectedAssignment, stagedGrades]);
+
   if (!dropdownSubmissions || dropdownSubmissions.length === 0) {
     return null;
   }
-
-  const stagedCount = selectedAssignment
-    ? Object.keys(stagedGrades[selectedAssignment.id] || {}).length
-    : 0;
 
   const handleSubmissionChange = (event) => {
     const submissionId = event.target.value;
