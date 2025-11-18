@@ -17,6 +17,7 @@ import {
   DialogActions,
   Button,
   Alert,
+  ListSubheader,
 } from '@mui/material';
 import {
   CheckCircle,
@@ -45,6 +46,33 @@ const StudentSelector = () => {
   const dropdownSubmissions = useMemo(() => {
     return allSubmissions.length > 0 ? allSubmissions : submissions;
   }, [allSubmissions, submissions]);
+
+  // Group and sort submissions for dropdown
+  const groupedSubmissions = useMemo(() => {
+    const ungraded = [];
+    const graded = [];
+
+    dropdownSubmissions.forEach(sub => {
+      const needsGrading = !sub.isGraded || sub.isAutoGradedZero;
+      if (needsGrading) {
+        ungraded.push(sub);
+      } else {
+        graded.push(sub);
+      }
+    });
+
+    // Sort each group alphabetically by student name
+    const sortByName = (a, b) => {
+      const nameA = (a.user?.sortable_name || a.user?.name || '').toLowerCase();
+      const nameB = (b.user?.sortable_name || b.user?.name || '').toLowerCase();
+      return nameA.localeCompare(nameB);
+    };
+
+    ungraded.sort(sortByName);
+    graded.sort(sortByName);
+
+    return { ungraded, graded };
+  }, [dropdownSubmissions]);
 
   const stagedCount = useMemo(() => {
     return selectedAssignment
@@ -126,20 +154,21 @@ const StudentSelector = () => {
             label="Select Student"
             onChange={handleSubmissionChange}
           >
-            {dropdownSubmissions.map((sub) => {
+            {/* Ungraded Section */}
+            {groupedSubmissions.ungraded.length > 0 && (
+              <ListSubheader sx={{ backgroundColor: 'background.paper', fontWeight: 'bold' }}>
+                Ungraded ({groupedSubmissions.ungraded.length})
+              </ListSubheader>
+            )}
+            {groupedSubmissions.ungraded.map((sub) => {
               const submissionId = String(sub.user_id || sub.id);
-              const isSelected = selectedSubmission && 
+              const isSelected = selectedSubmission &&
                 String(selectedSubmission.user_id || selectedSubmission.id) === submissionId;
-              const needsGrading = !sub.isGraded || sub.isAutoGradedZero;
-              
+
               return (
                 <MenuItem key={submissionId} value={submissionId}>
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, width: '100%' }}>
-                    {!needsGrading ? (
-                      <CheckCircle color="success" sx={{ fontSize: 18 }} />
-                    ) : (
-                      <RadioButtonUnchecked sx={{ fontSize: 18, color: 'text.secondary' }} />
-                    )}
+                    <RadioButtonUnchecked sx={{ fontSize: 18, color: 'text.secondary' }} />
                     <Typography variant="body2" sx={{ flex: 1 }}>
                       {getStudentName(sub)}
                     </Typography>
@@ -167,7 +196,46 @@ const StudentSelector = () => {
                         sx={{ height: 20, fontSize: '0.7rem' }}
                       />
                     )}
-                    {sub.canvasGrade && !sub.stagedGrade && !sub.isAutoGradedZero && (
+                  </Box>
+                </MenuItem>
+              );
+            })}
+
+            {/* Graded Section */}
+            {groupedSubmissions.graded.length > 0 && (
+              <ListSubheader sx={{ backgroundColor: 'background.paper', fontWeight: 'bold' }}>
+                Graded ({groupedSubmissions.graded.length})
+              </ListSubheader>
+            )}
+            {groupedSubmissions.graded.map((sub) => {
+              const submissionId = String(sub.user_id || sub.id);
+              const isSelected = selectedSubmission &&
+                String(selectedSubmission.user_id || selectedSubmission.id) === submissionId;
+
+              return (
+                <MenuItem key={submissionId} value={submissionId}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, width: '100%' }}>
+                    <CheckCircle color="success" sx={{ fontSize: 18 }} />
+                    <Typography variant="body2" sx={{ flex: 1 }}>
+                      {getStudentName(sub)}
+                    </Typography>
+                    {sub.isLate && (
+                      <Chip
+                        label="Late"
+                        size="small"
+                        color="error"
+                        sx={{ height: 20, fontSize: '0.7rem' }}
+                      />
+                    )}
+                    {sub.stagedGrade && (
+                      <Chip
+                        label="Staged"
+                        size="small"
+                        color="warning"
+                        sx={{ height: 20, fontSize: '0.7rem' }}
+                      />
+                    )}
+                    {sub.canvasGrade && !sub.stagedGrade && (
                       <Chip
                         label={sub.canvasGrade}
                         size="small"

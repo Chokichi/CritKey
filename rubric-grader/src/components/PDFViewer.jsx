@@ -755,10 +755,21 @@ const PDFViewer = ({ fileUrl, apiToken, onNext, onPrevious, hasNext, hasPrevious
     );
   }
 
-  // Calculate grading progress
-  const gradedCount = allSubmissions.filter(sub => sub.isGraded && !sub.isAutoGradedZero).length;
+  // Calculate grading progress with separation for two-tone progress bar
+  const pushedCount = allSubmissions.filter(sub =>
+    sub.isGraded && !sub.isAutoGradedZero && !sub.stagedGrade
+  ).length;
+
+  const stagedOnlyCount = allSubmissions.filter(sub =>
+    sub.stagedGrade !== null && sub.stagedGrade !== undefined
+  ).length;
+
+  const gradedCount = pushedCount + stagedOnlyCount;
   const totalCount = allSubmissions.length;
-  const progressPercent = totalCount > 0 ? (gradedCount / totalCount) * 100 : 0;
+
+  const pushedPercent = totalCount > 0 ? (pushedCount / totalCount) * 100 : 0;
+  const stagedPercent = totalCount > 0 ? (stagedOnlyCount / totalCount) * 100 : 0;
+  const progressPercent = pushedPercent + stagedPercent;
 
   return (
     <Paper sx={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%', overflow: 'hidden', flex: 1, minHeight: 0 }}>
@@ -767,29 +778,42 @@ const PDFViewer = ({ fileUrl, apiToken, onNext, onPrevious, hasNext, hasPrevious
         <StudentSelector />
       </Box>
 
-      {/* Grading Progress Bar */}
+      {/* Grading Progress Bar - Two-Tone (Green: Pushed, Orange: Staged) */}
       {totalCount > 0 && (
         <Box sx={{ px: 2, py: 0.5, borderBottom: 1, borderColor: 'divider', backgroundColor: 'grey.50' }}>
           <Stack direction="row" spacing={1.5} alignItems="center">
-            <Typography variant="caption" color="text.secondary" sx={{ minWidth: 70 }}>
-              {gradedCount}/{totalCount} graded
+            <Typography variant="caption" color="text.secondary" sx={{ minWidth: 135 }}>
+              {pushedCount} pushed, {stagedOnlyCount} staged
             </Typography>
-            <LinearProgress
-              variant="determinate"
-              value={progressPercent}
+            <Box
               sx={{
                 flex: 1,
                 height: 6,
                 borderRadius: 1,
                 backgroundColor: 'grey.300',
-                '& .MuiLinearProgress-bar': {
-                  backgroundColor: progressPercent === 100 ? 'success.main' : 'primary.main',
-                  borderRadius: 1,
-                },
+                display: 'flex',
+                overflow: 'hidden',
               }}
-            />
-            <Typography variant="caption" color="text.secondary" sx={{ minWidth: 35, textAlign: 'right' }}>
-              {Math.round(progressPercent)}%
+            >
+              {/* Green segment (pushed to Canvas) */}
+              <Box
+                sx={{
+                  width: `${pushedPercent}%`,
+                  backgroundColor: 'success.main',
+                  transition: 'width 0.3s ease',
+                }}
+              />
+              {/* Orange segment (staged but not pushed) */}
+              <Box
+                sx={{
+                  width: `${stagedPercent}%`,
+                  backgroundColor: 'warning.main',
+                  transition: 'width 0.3s ease',
+                }}
+              />
+            </Box>
+            <Typography variant="caption" color="text.secondary" sx={{ minWidth: 60, textAlign: 'right' }}>
+              {gradedCount}/{totalCount} ({Math.round(progressPercent)}%)
             </Typography>
           </Stack>
         </Box>

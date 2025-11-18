@@ -956,7 +956,7 @@ const useCanvasStore = create((set, get) => ({
         
         return {
           ...sub,
-          isGraded: isGradedInCanvas || hasRubricScore,
+          isGraded: isGradedInCanvas || hasRubricScore || hasStagedGrade,
           canvasGrade: canvasGrade,
           canvasScore: canvasScore,
           rubricScore: rubricScores[submissionId] || null,
@@ -1076,6 +1076,34 @@ const useCanvasStore = create((set, get) => ({
     get().selectSubmissionByIndex(nextIndex);
   },
 
+  // Navigate to next ungraded submission (prioritizes ungraded)
+  nextUngradedSubmission: () => {
+    const { submissionIndex, submissions } = get();
+    if (submissions.length === 0) return;
+
+    // Helper to check if submission needs grading
+    const needsGrading = (sub) => !sub.isGraded || sub.isAutoGradedZero;
+
+    // Search from current position + 1 to end
+    for (let i = submissionIndex + 1; i < submissions.length; i++) {
+      if (needsGrading(submissions[i])) {
+        get().selectSubmissionByIndex(i);
+        return;
+      }
+    }
+
+    // Wrap around: search from beginning to current position
+    for (let i = 0; i < submissionIndex; i++) {
+      if (needsGrading(submissions[i])) {
+        get().selectSubmissionByIndex(i);
+        return;
+      }
+    }
+
+    // No ungraded submissions found, fall back to regular next
+    get().nextSubmission();
+  },
+
   // Navigate to previous submission (cycles to last)
   previousSubmission: () => {
     const { submissionIndex, submissions } = get();
@@ -1135,6 +1163,10 @@ const useCanvasStore = create((set, get) => ({
             ...sub,
             isGraded: true,
             rubricScore: scoreData,
+            stagedGrade: {
+              grade: score.toString(),
+              feedback,
+            },
           };
         }
         return sub;

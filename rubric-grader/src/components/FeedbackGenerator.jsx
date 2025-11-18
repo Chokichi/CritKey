@@ -43,7 +43,7 @@ const FeedbackGenerator = () => {
   const [submittingToCanvas, setSubmittingToCanvas] = useState(false);
   
   const { currentRubric, getTotalPoints, resetGrading, saveRubricForSubmission } = useRubricStore();
-  const { selectedSubmission, selectedAssignment, saveRubricScoreForSubmission, nextSubmission } = useCanvasStore();
+  const { selectedSubmission, selectedAssignment, saveRubricScoreForSubmission, nextUngradedSubmission } = useCanvasStore();
 
   const loadFeedbackHistory = () => {
     setFeedbackHistory(getFeedbackHistory());
@@ -165,10 +165,10 @@ const FeedbackGenerator = () => {
       
       // Show success message
       setSnackbarOpen(true);
-      
-      // Auto-advance to next submission after a short delay
+
+      // Auto-advance to next ungraded submission after a short delay
       setTimeout(() => {
-        nextSubmission();
+        nextUngradedSubmission();
         resetGrading();
       }, 1000);
     } catch (error) {
