@@ -402,7 +402,7 @@ export const getCacheSize = async () => {
       };
       req.onerror = () => reject(req.error);
     });
-    
+
     let totalSize = 0;
     allPdfs.forEach(pdf => {
       if (pdf && pdf.blob) {
@@ -413,7 +413,7 @@ export const getCacheSize = async () => {
         }
       }
     });
-    
+
     return {
       count: allPdfs.length,
       size: totalSize,
@@ -421,6 +421,74 @@ export const getCacheSize = async () => {
   } catch (error) {
     console.error('Error getting cache size:', error);
     return { count: 0, size: 0 };
+  }
+};
+
+/**
+ * Clean up old cached PDFs (older than specified days)
+ * @param {number} daysOld - Delete PDFs cached more than this many days ago (default: 7)
+ * @returns {Promise<number>} Number of PDFs deleted
+ */
+export const cleanupOldCache = async (daysOld = 7) => {
+  try {
+    const db = await initDB();
+    const transaction = db.transaction([STORE_NAME], 'readwrite');
+    const store = transaction.objectStore(STORE_NAME);
+
+    // Get all cached PDFs
+    const allPdfs = await new Promise((resolve, reject) => {
+      const req = store.getAll();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => reject(req.error);
+    });
+
+    // Calculate cutoff time
+    const cutoffTime = Date.now() - (daysOld * 24 * 60 * 60 * 1000);
+
+    // Delete old PDFs
+    let deletedCount = 0;
+    for (const pdf of allPdfs) {
+      if (pdf.cachedAt && pdf.cachedAt < cutoffTime) {
+        await new Promise((resolve, reject) => {
+          const req = store.delete(pdf.id);
+          req.onsuccess = () => {
+            deletedCount++;
+            resolve();
+          };
+          req.onerror = () => reject(req.error);
+        });
+      }
+    }
+
+    console.log(`[cleanupOldCache] Deleted ${deletedCount} PDFs older than ${daysOld} days`);
+    return deletedCount;
+  } catch (error) {
+    console.error('Error cleaning up old cache:', error);
+    return 0;
+  }
+};
+
+/**
+ * Delete cache for a specific assignment if fully graded
+ * @param {string} assignmentId - Assignment ID
+ * @param {Object} options - Options for checking if assignment is complete
+ * @param {boolean} options.allGraded - Whether all submissions are graded
+ * @param {boolean} options.allPushed - Whether all staged grades have been pushed
+ * @returns {Promise<boolean>} True if cache was deleted
+ */
+export const cleanupCompletedAssignment = async (assignmentId, { allGraded, allPushed }) => {
+  // Only delete if both conditions are met
+  if (!allGraded || !allPushed) {
+    return false;
+  }
+
+  try {
+    await deleteAssignmentCache(assignmentId);
+    console.log(`[cleanupCompletedAssignment] Deleted cache for completed assignment ${assignmentId}`);
+    return true;
+  } catch (error) {
+    console.error(`Error cleaning up assignment ${assignmentId}:`, error);
+    return false;
   }
 };
 

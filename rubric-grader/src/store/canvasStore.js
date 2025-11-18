@@ -7,7 +7,9 @@ import {
   getCachedAssignments,
   deleteAssignmentCache as deleteAssignmentCacheUtil,
   clearAllCache as clearAllCacheUtil,
-  getCacheSize
+  getCacheSize,
+  cleanupOldCache,
+  cleanupCompletedAssignment
 } from '../utils/pdfCache';
 import {
   getRubricScores,
@@ -104,7 +106,7 @@ const useCanvasStore = create((set, get) => ({
   
   // PDF Caching
   offlineMode: false,
-  cachingProgress: { current: 0, total: 0, isCaching: false },
+  cachingProgress: { current: 0, total: 0, isCaching: false, failed: [] }, // Track failed downloads
   cachedAssignments: [],
   parallelDownloadLimit: 3, // 0 = no limit
   
@@ -183,6 +185,13 @@ const useCanvasStore = create((set, get) => ({
       console.error('Error loading cached assignments:', error);
       set({ cachedAssignments: [] });
     }
+
+    // Auto-cleanup: Remove PDFs older than 7 days
+    try {
+      await cleanupOldCache(7);
+    } catch (error) {
+      console.error('Error cleaning up old cache:', error);
+    }
   },
 
   // Toggle offline mode
@@ -211,7 +220,7 @@ const useCanvasStore = create((set, get) => ({
       return;
     }
 
-    set({ cachingProgress: { current: 0, total: allSubmissions.length, isCaching: true } });
+    set({ cachingProgress: { current: 0, total: allSubmissions.length, isCaching: true, failed: [] } });
 
     try {
       // Filter submissions with PDFs and check which ones need caching
@@ -264,12 +273,12 @@ const useCanvasStore = create((set, get) => ({
       // Update total to reflect actual PDFs that need caching
       const totalToCache = pdfsToCache.length;
       const alreadyCached = allSubmissions.length - totalToCache;
-      set({ cachingProgress: { current: alreadyCached, total: allSubmissions.length, isCaching: true } });
+      set({ cachingProgress: { current: alreadyCached, total: allSubmissions.length, isCaching: true, failed: [] } });
 
       // Check again before starting cache downloads
       if (get().currentAssignmentRequestId !== requestId) {
         debugLog('[cacheAllPdfs] Request cancelled before downloads');
-        set({ cachingProgress: { current: 0, total: 0, isCaching: false } });
+        set({ cachingProgress: { current: 0, total: 0, isCaching: false, failed: [] } });
         return;
       }
 
@@ -347,6 +356,7 @@ const useCanvasStore = create((set, get) => ({
               current: state.cachingProgress.current + 1,
               total: state.cachingProgress.total,
               isCaching: true,
+              failed: state.cachingProgress.failed, // Preserve failed array
             },
           }));
         } catch (err) {
@@ -354,12 +364,13 @@ const useCanvasStore = create((set, get) => ({
           if (err.message !== 'Request cancelled') {
             console.warn(`[cacheAllPdfs] Failed to cache PDF for submission ${submissionId} after retries:`, err.message);
           }
-          // Still update progress even on error
+          // Still update progress and track failure
           set((state) => ({
             cachingProgress: {
               current: state.cachingProgress.current + 1,
               total: state.cachingProgress.total,
               isCaching: true,
+              failed: [...state.cachingProgress.failed, { submissionId, error: err.message }],
             },
           }));
         }
@@ -1055,20 +1066,24 @@ const useCanvasStore = create((set, get) => ({
     }
   },
 
-  // Navigate to next submission
+  // Navigate to next submission (cycles back to first)
   nextSubmission: () => {
     const { submissionIndex, submissions } = get();
-    if (submissionIndex < submissions.length - 1) {
-      get().selectSubmissionByIndex(submissionIndex + 1);
-    }
+    if (submissions.length === 0) return;
+
+    // Cycle to first submission if at the end
+    const nextIndex = submissionIndex >= submissions.length - 1 ? 0 : submissionIndex + 1;
+    get().selectSubmissionByIndex(nextIndex);
   },
 
-  // Navigate to previous submission
+  // Navigate to previous submission (cycles to last)
   previousSubmission: () => {
-    const { submissionIndex } = get();
-    if (submissionIndex > 0) {
-      get().selectSubmissionByIndex(submissionIndex - 1);
-    }
+    const { submissionIndex, submissions } = get();
+    if (submissions.length === 0) return;
+
+    // Cycle to last submission if at the beginning
+    const prevIndex = submissionIndex <= 0 ? submissions.length - 1 : submissionIndex - 1;
+    get().selectSubmissionByIndex(prevIndex);
   },
 
   // Save rubric score for current submission
@@ -1166,8 +1181,8 @@ const useCanvasStore = create((set, get) => ({
       debugLog('[applySorting] After graded filter:', sorted.length);
     }
     // 'all' shows everything, no filter needed
-    
-    // Sort: ungraded first (including auto-graded zeros), then by student name
+
+    // Sort: ungraded first (including auto-graded zeros), then by student last name
     sorted.sort((a, b) => {
       // First, prioritize ungraded (including auto-graded zeros)
       const aNeedsGrading = !a.isGraded || a.isAutoGradedZero;
@@ -1175,9 +1190,9 @@ const useCanvasStore = create((set, get) => ({
       if (aNeedsGrading !== bNeedsGrading) {
         return aNeedsGrading ? -1 : 1;
       }
-      // Then sort by student name
-      const nameA = a.user?.name || a.user?.sortable_name || '';
-      const nameB = b.user?.name || b.user?.sortable_name || '';
+      // Then sort by student last name (sortable_name is "Last, First" format in Canvas)
+      const nameA = a.user?.sortable_name || a.user?.name || '';
+      const nameB = b.user?.sortable_name || b.user?.name || '';
       return nameA.localeCompare(nameB);
     });
 
@@ -1308,14 +1323,32 @@ const useCanvasStore = create((set, get) => ({
       
       // Re-apply sorting after pushing grades
       get().applySorting();
-      
+
       if (errors.length > 0) {
-        set({ 
+        set({
           error: `Pushed ${results.length} grades successfully, but ${errors.length} failed. Check console for details.`,
         });
         console.error('Errors pushing grades:', errors);
       } else {
         set({ error: null });
+      }
+
+      // Auto-cleanup: Check if all submissions are graded and all staged grades pushed
+      try {
+        const { allSubmissions, stagedGrades } = get();
+        const allGraded = allSubmissions.every(sub => sub.isGraded && !sub.isAutoGradedZero);
+        const allPushed = !stagedGrades[assignmentId] || Object.keys(stagedGrades[assignmentId]).length === 0;
+
+        if (allGraded && allPushed) {
+          debugLog(`[pushAllStagedGrades] All submissions graded and pushed for assignment ${assignmentId}, cleaning up cache`);
+          await cleanupCompletedAssignment(assignmentId, { allGraded, allPushed });
+
+          // Update cached assignments list
+          const cached = await getCachedAssignments();
+          set({ cachedAssignments: Array.isArray(cached) ? cached : [] });
+        }
+      } catch (error) {
+        console.error('Error during auto-cleanup after pushing grades:', error);
       }
 
       return { results, errors };

@@ -172,20 +172,20 @@ function App() {
 
   const hotkeys = useHotkeyConfig();
 
-  // Hotkeys for submission navigation
+  // Hotkeys for submission navigation (with cycling)
   useHotkeys(hotkeys.nextSubmission, (e) => {
     e.preventDefault();
-    if (submissionIndex < submissions.length - 1) {
+    if (submissions.length > 0) {
       nextSubmission();
     }
-  }, [submissionIndex, submissions.length, nextSubmission, hotkeys.nextSubmission]);
+  }, [submissions.length, nextSubmission, hotkeys.nextSubmission]);
 
   useHotkeys(hotkeys.previousSubmission, (e) => {
     e.preventDefault();
-    if (submissionIndex > 0) {
+    if (submissions.length > 0) {
       previousSubmission();
     }
-  }, [submissionIndex, previousSubmission, hotkeys.previousSubmission]);
+  }, [submissions.length, previousSubmission, hotkeys.previousSubmission]);
 
   // Hotkeys for criterion navigation (work even when rubric is collapsed)
   useHotkeys(hotkeys.nextCriterion, (e) => {
@@ -328,8 +328,8 @@ function App() {
                 apiToken={apiToken}
                 onNext={nextSubmission}
                 onPrevious={previousSubmission}
-                hasNext={submissionIndex < submissions.length - 1}
-                hasPrevious={submissionIndex > 0}
+                hasNext={submissions.length > 1}
+                hasPrevious={submissions.length > 1}
               />
             ) : loadingSubmissions && selectedAssignment ? (
               <Box

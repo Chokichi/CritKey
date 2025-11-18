@@ -62,7 +62,7 @@ const PDFViewer = ({ fileUrl, apiToken, onNext, onPrevious, hasNext, hasPrevious
   const pageRefs = useRef({});
   const currentRenderSessionRef = useRef(0); // Track render sessions to prevent race conditions
 
-  // Helper function to wait for PDF cache using event-driven approach
+  // Helper function to wait for PDF cache using polling approach
   const waitForPdfCache = async (fileUrl, assignmentId, submissionId, signal, maxWaitTime = 60000) => {
     const startTime = Date.now();
     const checkInterval = 500; // Check every 500ms
@@ -81,14 +81,15 @@ const PDFViewer = ({ fileUrl, apiToken, onNext, onPrevious, hasNext, hasPrevious
       };
       signal.addEventListener('abort', abortHandler);
 
-      // Subscribe to caching progress changes
       let checkTimer = null;
-      const unsubscribe = useCanvasStore.subscribe(
-        (state) => state.cachingProgress,
-        async (progress) => {
-          // Clear any pending check
-          if (checkTimer) {
-            clearTimeout(checkTimer);
+
+      const checkForPdf = async () => {
+        try {
+          // Check if aborted
+          if (signal.aborted) {
+            cleanup();
+            reject(new Error('Aborted'));
+            return;
           }
 
           // Check for cached PDF
@@ -111,41 +112,42 @@ const PDFViewer = ({ fileUrl, apiToken, onNext, onPrevious, hasNext, hasPrevious
             return;
           }
 
-          // Check if caching completed but PDF not found
-          if (!progress.isCaching) {
+          // Check if caching is still in progress
+          const currentProgress = useCanvasStore.getState().cachingProgress;
+          if (!currentProgress.isCaching) {
+            // Caching completed - do ONE final check before giving up
+            const finalCheck = await getCachedPdf(fileUrl || '', {
+              assignmentId,
+              submissionId,
+            });
+            if (finalCheck) {
+              cleanup();
+              resolve(finalCheck);
+              return;
+            }
+            // PDF not found even after caching completed
             cleanup();
             reject(new Error('PDF not found after caching completed'));
             return;
           }
 
           // Schedule next check
-          checkTimer = setTimeout(async () => {
-            // Trigger subscription callback by checking state
-            const currentProgress = useCanvasStore.getState().cachingProgress;
-            if (currentProgress.isCaching) {
-              // Re-check periodically
-              const cachedBlob = await getCachedPdf(fileUrl || '', {
-                assignmentId,
-                submissionId,
-              });
-              if (cachedBlob) {
-                cleanup();
-                resolve(cachedBlob);
-              }
-            }
-          }, checkInterval);
-        },
-        {
-          fireImmediately: true, // Check immediately on subscription
+          checkTimer = setTimeout(checkForPdf, checkInterval);
+        } catch (err) {
+          cleanup();
+          reject(err);
         }
-      );
+      };
+
+      // Start checking
+      checkForPdf();
 
       const cleanup = () => {
         if (checkTimer) {
           clearTimeout(checkTimer);
+          checkTimer = null;
         }
         signal.removeEventListener('abort', abortHandler);
-        unsubscribe();
       };
     });
   };
@@ -220,14 +222,16 @@ const PDFViewer = ({ fileUrl, apiToken, onNext, onPrevious, hasNext, hasPrevious
               if (err.message === 'Aborted') {
                 return; // Silently abort
               }
-              throw err; // Re-throw other errors
+              // Don't re-throw - fall through to network fallback
+              console.warn('[PDFViewer] PDF not found in cache after waiting, will attempt network fetch');
             }
             setWaitingForCache(false);
           }
 
-          // If still not cached after waiting, show error
+          // If still not cached, fall through to network fetch
+          // This handles cases where PDF failed to cache during cacheAllPdfs()
           if (!cachedBlob) {
-            throw new Error('PDF not cached. Please wait for caching to complete or enable online mode.');
+            console.warn('[PDFViewer] PDF not cached (cache miss or failed download), falling back to network fetch');
           }
         }
         
@@ -246,8 +250,9 @@ const PDFViewer = ({ fileUrl, apiToken, onNext, onPrevious, hasNext, hasPrevious
           pdfSource = {
             data: arrayBuffer,
           };
-        } else if (!offlineMode) {
-          // Fetch PDF through proxy if we have an API token and not in offline mode
+        } else {
+          // Fallback to network fetch if PDF not in cache
+          // This handles: cache miss, failed cache download, or online mode
           if (apiToken) {
             const url = `http://localhost:3001/api/proxy-file?url=${encodeURIComponent(currentFileUrl)}`;
             pdfSource = {
@@ -260,8 +265,6 @@ const PDFViewer = ({ fileUrl, apiToken, onNext, onPrevious, hasNext, hasPrevious
           } else {
             pdfSource = { url: currentFileUrl, withCredentials: false };
           }
-        } else {
-          throw new Error('PDF not cached and offline mode is enabled.');
         }
 
         const loadingTask = getDocument(pdfSource);

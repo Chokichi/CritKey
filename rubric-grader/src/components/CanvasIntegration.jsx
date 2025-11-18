@@ -324,7 +324,7 @@ const CanvasIntegration = () => {
             helperText={parallelDownloadLimit === 0 ? 'All PDFs will download simultaneously' : `${parallelDownloadLimit} PDFs will download at a time`}
           />
         </Tooltip>
-        {selectedAssignment && (
+        {selectedAssignment && !offlineMode && (
           <Button
             variant="outlined"
             startIcon={<CloudDownloadIcon />}
