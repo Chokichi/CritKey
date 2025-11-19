@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import {
   Box,
   Paper,
@@ -432,8 +432,23 @@ const CanvasIntegration = () => {
                 </MenuItem>
               ) : assignments.length === 0 ? (
                 <MenuItem disabled>No assignments available (showing published with submissions only)</MenuItem>
-              ) : (
-                assignments.map((assignment) => {
+              ) : (() => {
+                // Sort assignments: those with needs_grading_count > 0 first, then by name
+                const sortedAssignments = [...assignments].sort((a, b) => {
+                  const aNeedsGrading = (a.needs_grading_count ?? 0) > 0;
+                  const bNeedsGrading = (b.needs_grading_count ?? 0) > 0;
+                  
+                  // If one needs grading and the other doesn't, prioritize the one that needs grading
+                  if (aNeedsGrading && !bNeedsGrading) return -1;
+                  if (!aNeedsGrading && bNeedsGrading) return 1;
+                  
+                  // If both need grading or both don't, sort by name
+                  const nameA = (a.name || '').toLowerCase();
+                  const nameB = (b.name || '').toLowerCase();
+                  return nameA.localeCompare(nameB);
+                });
+                
+                return sortedAssignments.map((assignment) => {
                   const assignmentId = String(assignment.id);
                   const needsGradingCount = assignment.needs_grading_count ?? 0;
                   const stagedCount = stagedGrades[assignmentId] ? Object.keys(stagedGrades[assignmentId]).length : 0;
@@ -494,8 +509,8 @@ const CanvasIntegration = () => {
                       </Box>
                     </MenuItem>
                   );
-                })
-              )}
+                });
+              })()}
             </Select>
           </FormControl>
         )}
