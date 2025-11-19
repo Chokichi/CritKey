@@ -18,6 +18,8 @@ import {
   Button,
   Alert,
   ListSubheader,
+  FormControlLabel,
+  Switch,
 } from '@mui/material';
 import {
   CheckCircle,
@@ -41,6 +43,7 @@ const StudentSelector = () => {
   const pushingGrades = useCanvasStore((state) => state.pushingGrades);
   
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
+  const [includeComments, setIncludeComments] = useState(true); // Default to including comments
 
   // Memoize expensive computations
   const dropdownSubmissions = useMemo(() => {
@@ -128,7 +131,7 @@ const StudentSelector = () => {
   const handleConfirmPush = async () => {
     setConfirmDialogOpen(false);
     try {
-      await pushAllStagedGrades();
+      await pushAllStagedGrades(includeComments);
     } catch (error) {
       console.error('Error pushing grades:', error);
     }
@@ -333,7 +336,7 @@ const StudentSelector = () => {
         <DialogContent>
           <Alert severity="warning" sx={{ mb: 2 }}>
             <Typography variant="body2" fontWeight="medium">
-              This action will post grades and feedback comments to Canvas for {stagedCount} student{stagedCount !== 1 ? 's' : ''}.
+              This action will post grades{includeComments ? ' and feedback comments' : ''} to Canvas for {stagedCount} student{stagedCount !== 1 ? 's' : ''}.
             </Typography>
           </Alert>
           <Box sx={{ mb: 2 }}>
@@ -344,12 +347,30 @@ const StudentSelector = () => {
               <Typography component="li" variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>
                 Post the grade for each student
               </Typography>
-              <Typography component="li" variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>
-                Post the feedback comment for each student
-              </Typography>
+              {includeComments && (
+                <Typography component="li" variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>
+                  Post the feedback comment for each student
+                </Typography>
+              )}
               <Typography component="li" variant="body2" color="text.secondary">
                 Send notifications to students (if Canvas notifications are enabled)
               </Typography>
+            </Box>
+            <Box sx={{ mt: 2, mb: 1 }}>
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={includeComments}
+                    onChange={(e) => setIncludeComments(e.target.checked)}
+                    disabled={pushingGrades}
+                  />
+                }
+                label={
+                  <Typography variant="body2">
+                    Include generated feedback as comments
+                  </Typography>
+                }
+              />
             </Box>
             <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
               This action cannot be undone. Are you sure you want to proceed?

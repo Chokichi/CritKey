@@ -5,6 +5,7 @@ import fetch from 'node-fetch';
 import rateLimit from 'express-rate-limit';
 import { body, param, query, validationResult } from 'express-validator';
 import helmet from 'helmet';
+import FormData from 'form-data';
 
 dotenv.config();
 
@@ -414,7 +415,13 @@ app.put('/api/courses/:courseId/assignments/:assignmentId/submissions/:userId', 
       body.submission = { posted_grade: formattedGrade };
     }
     if (comment) {
-      body.comment = { text_comment: comment };
+      const commentObj = { text_comment: comment };
+      // If attempt number is provided, include it in the comment object
+      // Canvas API expects comment[attempt] to target a specific submission attempt
+      if (req.body.attempt !== null && req.body.attempt !== undefined) {
+        commentObj.attempt = req.body.attempt;
+      }
+      body.comment = commentObj;
     }
 
     const { data, requestUrl } = await canvasRequest(
@@ -432,6 +439,161 @@ app.put('/api/courses/:courseId/assignments/:assignmentId/submissions/:userId', 
     console.error('Error in /api/courses/:courseId/assignments/:assignmentId/submissions/:userId PUT:', error.message);
     const status = error.status || 500;
     const message = error.status === 401 ? 'Authorization required' : 'Failed to update submission';
+    res.status(status).json({ error: message });
+  }
+});
+
+// Batch update submissions (post grades and feedback for multiple students)
+app.post('/api/courses/:courseId/assignments/:assignmentId/submissions/update_grades', [
+  param('courseId').isNumeric(),
+  param('assignmentId').isNumeric(),
+  body('grade_data').isObject(),
+  body('canvasBase').optional().isURL(),
+  handleValidationErrors
+], async (req, res) => {
+  try {
+    const { courseId, assignmentId } = req.params;
+    const apiToken = req.apiToken; // From Authorization header
+    const { grade_data, canvasBase } = req.body;
+
+    if (!apiToken) {
+      return res.status(401).json({ error: 'Authorization required' });
+    }
+
+    // First, get the assignment to determine grading type
+    let assignment = null;
+    try {
+      const assignmentResponse = await canvasRequest(
+        `/courses/${courseId}/assignments/${assignmentId}`,
+        apiToken,
+        {},
+        canvasBase || CANVAS_API_BASE
+      );
+      assignment = assignmentResponse.data;
+    } catch (err) {
+      console.warn('Could not fetch assignment details:', err.message);
+    }
+
+    const gradingType = assignment?.grading_type || 'points';
+
+    // Helper function to format grade based on assignment type
+    const formatGrade = (postedGrade) => {
+      if (!postedGrade) return null;
+      
+      // If grade is in "earned/possible" format (e.g., "85/100")
+      if (typeof postedGrade === 'string' && postedGrade.includes('/')) {
+        const [earnedStr, possibleStr] = postedGrade.split('/').map(s => s.trim());
+        const earned = parseFloat(earnedStr);
+        const possible = parseFloat(possibleStr);
+        
+        if (!isNaN(earned) && !isNaN(possible) && possible > 0) {
+          switch (gradingType) {
+            case 'points':
+              return earned.toString();
+            case 'percent':
+              const percentage = (earned / possible) * 100;
+              return `${percentage.toFixed(2)}%`;
+            case 'letter_grade':
+              return earned.toString(); // Canvas will convert
+            case 'gpa_scale':
+              return earned.toString();
+            case 'pass_fail':
+              const passPercentage = (earned / possible) * 100;
+              return passPercentage >= 60 ? 'pass' : 'fail';
+            default:
+              return earned.toString();
+          }
+        }
+      }
+      return postedGrade;
+    };
+
+    // Build form data for Canvas API
+    const formData = new FormData();
+
+    // Process each student's grade data
+    for (const [userId, data] of Object.entries(grade_data)) {
+      if (data.posted_grade !== undefined && data.posted_grade !== null) {
+        const formattedGrade = formatGrade(data.posted_grade);
+        if (formattedGrade) {
+          formData.append(`grade_data[${userId}][posted_grade]`, formattedGrade);
+        }
+      }
+      if (data.text_comment) {
+        formData.append(`grade_data[${userId}][text_comment]`, data.text_comment);
+        // Include attempt number if provided (Canvas expects comment[attempt] parameter)
+        if (data.attempt !== null && data.attempt !== undefined) {
+          formData.append(`grade_data[${userId}][comment][attempt]`, String(data.attempt));
+        }
+      }
+    }
+
+    // Make request to Canvas API
+    const url = `${canvasBase || CANVAS_API_BASE}/courses/${courseId}/assignments/${assignmentId}/submissions/update_grades`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiToken}`,
+        ...formData.getHeaders(),
+      },
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => null);
+      let message = `Failed to batch update grades: ${response.status} ${response.statusText}`;
+      if (errorText) {
+        try {
+          const errorData = JSON.parse(errorText);
+          if (errorData?.error) {
+            message = errorData.error;
+          }
+        } catch (parseError) {
+          message = `${message} - ${errorText.substring(0, 200)}`;
+        }
+      }
+      throw new Error(message);
+    }
+
+    const progressData = await response.json();
+    res.set('X-Canvas-Request-Url', url);
+    res.json(progressData);
+  } catch (error) {
+    console.error('Error in /api/courses/:courseId/assignments/:assignmentId/submissions/update_grades POST:', error.message);
+    const status = error.status || 500;
+    const message = error.status === 401 ? 'Authorization required' : 'Failed to batch update grades';
+    res.status(status).json({ error: message });
+  }
+});
+
+// Get progress status for async operations
+app.get('/api/progress/:progressId', [
+  param('progressId').isNumeric(),
+  query('canvasBase').optional().isURL(),
+  handleValidationErrors
+], async (req, res) => {
+  try {
+    const { progressId } = req.params;
+    const apiToken = req.apiToken;
+    const { canvasBase } = req.query;
+
+    if (!apiToken) {
+      return res.status(401).json({ error: 'Authorization required' });
+    }
+
+    const { data, requestUrl } = await canvasRequest(
+      `/progress/${progressId}`,
+      apiToken,
+      {},
+      canvasBase || CANVAS_API_BASE
+    );
+
+    res.set('X-Canvas-Request-Url', requestUrl);
+    res.json(data);
+  } catch (error) {
+    console.error('Error in /api/progress/:progressId GET:', error.message);
+    const status = error.status || 500;
+    const message = error.status === 401 ? 'Authorization required' : 'Failed to get progress';
     res.status(status).json({ error: message });
   }
 });
