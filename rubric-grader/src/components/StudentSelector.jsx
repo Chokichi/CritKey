@@ -56,7 +56,23 @@ const StudentSelector = () => {
     const graded = [];
 
     dropdownSubmissions.forEach(sub => {
+      const submissionId = String(sub.user_id || sub.id);
       const needsGrading = !sub.isGraded || sub.isAutoGradedZero;
+      
+      // Debug logging for submissions with staged grades
+      if (sub.stagedGrade) {
+        console.log(`[StudentSelector] Submission ${submissionId} grouping:`, {
+          submissionId,
+          isGraded: sub.isGraded,
+          isAutoGradedZero: sub.isAutoGradedZero,
+          needsGrading,
+          hasStagedGrade: !!sub.stagedGrade,
+          stagedGradeGrade: sub.stagedGrade?.grade,
+          canvasGrade: sub.canvasGrade,
+          willGoTo: needsGrading ? 'ungraded' : 'graded',
+        });
+      }
+      
       if (needsGrading) {
         ungraded.push(sub);
       } else {

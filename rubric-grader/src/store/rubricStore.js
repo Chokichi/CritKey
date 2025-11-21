@@ -344,8 +344,16 @@ const useRubricStore = create((set, get) => ({
     const { currentRubric, saveSessionDebounced } = get();
     if (!currentRubric) return;
 
-    const updatedRubric = { ...currentRubric };
-    updatedRubric.criteria[criterionIndex].comment = comment;
+    // Create new objects/arrays to avoid mutation - this ensures React sees the change
+    const updatedCriteria = [...currentRubric.criteria];
+    updatedCriteria[criterionIndex] = {
+      ...updatedCriteria[criterionIndex],
+      comment: comment,
+    };
+    const updatedRubric = {
+      ...currentRubric,
+      criteria: updatedCriteria,
+    };
     set({ currentRubric: updatedRubric });
     // Use debounced save to avoid saving on every keystroke
     if (saveSessionDebounced) {

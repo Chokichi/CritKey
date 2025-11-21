@@ -16,6 +16,7 @@ import {
   Box,
   Typography,
 } from '@mui/material';
+import confetti from 'canvas-confetti';
 import useCanvasStore from '../store/canvasStore';
 
 const CourseDebugModal = ({ open, onClose }) => {
@@ -110,6 +111,38 @@ const CourseDebugModal = ({ open, onClose }) => {
   const formatDate = (dateString) => {
     if (!dateString) return 'N/A';
     return new Date(dateString).toLocaleDateString();
+  };
+
+  const testConfetti = () => {
+    // Trigger confetti from both sides of the window (same as the real effect)
+    const duration = 3000;
+    const end = Date.now() + duration;
+    
+    const triggerConfetti = () => {
+      if (Date.now() > end) return;
+      
+      // Left side confetti
+      confetti({
+        particleCount: 50,
+        angle: 60,
+        spread: 55,
+        origin: { x: 0, y: 0.5 },
+        colors: ['#FFD700', '#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8'],
+      });
+      
+      // Right side confetti
+      confetti({
+        particleCount: 50,
+        angle: 120,
+        spread: 55,
+        origin: { x: 1, y: 0.5 },
+        colors: ['#FFD700', '#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8'],
+      });
+      
+      requestAnimationFrame(triggerConfetti);
+    };
+    
+    triggerConfetti();
   };
 
   if (!open) return null;
@@ -229,6 +262,9 @@ const CourseDebugModal = ({ open, onClose }) => {
         </Box>
       </DialogContent>
       <DialogActions>
+        <Button onClick={testConfetti} color="primary" variant="outlined">
+          Test Confetti 🎉
+        </Button>
         <Button onClick={onClose}>Close</Button>
       </DialogActions>
     </Dialog>

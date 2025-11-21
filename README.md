@@ -1624,6 +1624,128 @@ graph TD
 6. **Batched Updates**: Grade saving combines multiple state updates into one
 7. **Debug Logging**: All console.log calls guarded by DEBUG flag for production
 
+### Grading State Flow Diagram
+
+This diagram shows the detailed state flow when staging grades and how `allSubmissions` and `submissions` are kept in sync:
+
+```mermaid
+graph TD
+    %% Initial State
+    A[User Selects Assignment] --> B[fetchSubmissions]
+    B --> C[Fetch from Canvas API]
+    C --> D[Enrich Submissions]
+    D --> E{Enrichment Logic}
+    E --> F[Check canvasGrade<br/>Check stagedGrades<br/>Check rubricScores]
+    F --> G[Calculate isGraded:<br/>canvasGrade OR stagedGrade]
+    G --> H[Set allSubmissions<br/>with enriched data]
+    H --> I[Call applySorting]
+    
+    %% applySorting Flow
+    I --> J[applySorting Starts]
+    J --> K[Read allSubmissions<br/>from State]
+    K --> L[Re-enrich allSubmissions]
+    L --> M{Re-enrichment Logic}
+    M --> N[Map over allSubmissions]
+    N --> O[For each submission:<br/>Check stagedGrades<br/>Check rubricScores<br/>Recalculate isGraded]
+    O --> P[Create enriched array]
+    P --> Q[Filter by sortBy<br/>ungraded/graded/all]
+    Q --> R[Sort: ungraded first,<br/>then by student name]
+    R --> S[Atomic State Update]
+    
+    %% Critical State Update
+    S --> T[set<br/>submissions: sorted<br/>allSubmissions: enriched<br/>submissionIndex: newIndex]
+    
+    %% Staging a Grade
+    U[User Stages Grade] --> V[saveRubricScoreForSubmission]
+    V --> W[Save to localStorage<br/>saveRubricScore]
+    W --> X[Stage to localStorage<br/>stageGrade]
+    X --> Y[Atomic State Update]
+    
+    %% State Update in saveRubricScoreForSubmission
+    Y --> Z[set Function]
+    Z --> AA[Update rubricScores<br/>assignmentId -> submissionId]
+    AA --> AB[Update stagedGrades<br/>assignmentId -> submissionId]
+    AB --> AC[Update submissions array<br/>Map: update matching submission]
+    AC --> AD[Update allSubmissions array<br/>Map: update matching submission]
+    AD --> AE[Set isGraded: true<br/>Set stagedGrade object<br/>Set rubricScore]
+    AE --> AF[Return new state:<br/>rubricScores<br/>stagedGrades<br/>submissions<br/>allSubmissions]
+    
+    %% Re-apply Sorting After Staging
+    AF --> AG[Call applySorting]
+    AG --> J
+    
+    %% Component Reading State
+    T --> AH[StudentSelector Component]
+    AH --> AI[useMemo: dropdownSubmissions]
+    AI --> AJ{allSubmissions.length > 0?}
+    AJ -->|Yes| AK[Use allSubmissions<br/>for dropdown]
+    AJ -->|No| AL[Use submissions<br/>for dropdown]
+    AK --> AM[Group by isGraded]
+    AL --> AM
+    AM --> AN[Render Dropdown<br/>Show checkmark if isGraded]
+    
+    %% State Consistency
+    T -.->|Both arrays updated| AO[State Consistency:<br/>submissions = filtered sorted<br/>allSubmissions = enriched full]
+    AO -.->|StudentSelector reads| AK
+    
+    %% Styling
+    style A fill:#e1f5ff
+    style D fill:#d4edda
+    style E fill:#fff3cd
+    style F fill:#fff3cd
+    style G fill:#fff3cd
+    style H fill:#d4edda
+    style J fill:#fff3cd
+    style K fill:#fff3cd
+    style L fill:#d4edda
+    style M fill:#fff3cd
+    style N fill:#fff3cd
+    style O fill:#fff3cd
+    style P fill:#d4edda
+    style Q fill:#fff3cd
+    style R fill:#fff3cd
+    style S fill:#d4edda
+    style T fill:#d4edda,stroke:#28a745,stroke-width:3px
+    style U fill:#e1f5ff
+    style V fill:#fff3cd
+    style W fill:#fff3cd
+    style X fill:#fff3cd
+    style Y fill:#d4edda
+    style Z fill:#fff3cd
+    style AA fill:#fff3cd
+    style AB fill:#fff3cd
+    style AC fill:#fff3cd
+    style AD fill:#fff3cd,stroke:#28a745,stroke-width:2px
+    style AE fill:#fff3cd
+    style AF fill:#d4edda
+    style AG fill:#fff3cd
+    style AH fill:#e1f5ff
+    style AI fill:#fff3cd
+    style AJ fill:#fff3cd
+    style AK fill:#d4edda,stroke:#28a745,stroke-width:2px
+    style AL fill:#d4edda
+    style AM fill:#d4edda
+    style AN fill:#d4edda
+    style AO fill:#d1ecf1,stroke:#0c5460,stroke-width:2px
+```
+
+**Key Points in Grading State Flow:**
+
+1. **Initial Enrichment** (Green): `fetchSubmissions` enriches submissions with Canvas grades, staged grades, and rubric scores, then sets `allSubmissions`.
+
+2. **Re-enrichment in applySorting** (Yellow → Green): `applySorting` re-reads `allSubmissions` and re-enriches it with the latest `stagedGrades` and `rubricScores` to ensure `isGraded` is always accurate.
+
+3. **Critical State Update** (Thick Green Border): `applySorting` updates BOTH `submissions` (filtered/sorted) AND `allSubmissions` (enriched full list) in a single atomic `set()` call. This ensures `StudentSelector` sees the updates immediately.
+
+4. **Staging Flow** (Blue → Yellow → Green): When a grade is staged:
+   - Saved to localStorage first
+   - Then state is updated atomically (both `submissions` and `allSubmissions` arrays)
+   - Then `applySorting` is called to re-enrich and update both arrays again
+
+5. **StudentSelector Reading** (Thick Green Border): `StudentSelector` uses `allSubmissions` for the dropdown (if available), so it must be kept in sync with `submissions`. The dropdown shows checkmarks based on `isGraded` status.
+
+6. **Race Condition Prevention** (Blue Border): By updating `allSubmissions` in `applySorting`, we ensure that even if `saveRubricScoreForSubmission` updates the arrays, the subsequent `applySorting` call will re-enrich and update both arrays, keeping them consistent.
+
 ---
 
 ## Contributing

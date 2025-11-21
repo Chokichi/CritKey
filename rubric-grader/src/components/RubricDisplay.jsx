@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback, startTransition } from 'react';
 import {
   Box,
   Paper,
@@ -71,32 +71,37 @@ const formatPoints = (points) => {
 };
 
 const RubricDisplay = () => {
-  const {
-    currentRubric,
-    currentCriterionIndex,
-    selectLevel,
-    updateComment,
-    goToNextCriterion,
-    goToPreviousCriterion,
-    goToCriterion,
-    addLevel,
-    updateLevel,
-    deleteLevel,
-    replaceCriteria,
-    updateFeedbackLabel,
-    autoAdvance,
-    loadRubricForSubmission,
-    saveRubricForSubmission,
-    availableRubrics,
-  } = useRubricStore();
+  // Use granular selectors to prevent re-renders when unrelated state changes
+  // Only re-render when the specific data we need changes
+  const currentRubric = useRubricStore((state) => state.currentRubric);
+  const currentCriterionIndex = useRubricStore((state) => state.currentCriterionIndex);
+  const autoAdvance = useRubricStore((state) => state.autoAdvance);
+  const availableRubrics = useRubricStore((state) => state.availableRubrics);
   
-  const {
-    selectedSubmission,
-    selectedAssignment,
-  } = useCanvasStore();
+  // Actions are stable references, so they won't cause re-renders
+  const selectLevel = useRubricStore((state) => state.selectLevel);
+  const updateComment = useRubricStore((state) => state.updateComment);
+  const goToNextCriterion = useRubricStore((state) => state.goToNextCriterion);
+  const goToPreviousCriterion = useRubricStore((state) => state.goToPreviousCriterion);
+  const goToCriterion = useRubricStore((state) => state.goToCriterion);
+  const addLevel = useRubricStore((state) => state.addLevel);
+  const updateLevel = useRubricStore((state) => state.updateLevel);
+  const deleteLevel = useRubricStore((state) => state.deleteLevel);
+  const replaceCriteria = useRubricStore((state) => state.replaceCriteria);
+  const updateFeedbackLabel = useRubricStore((state) => state.updateFeedbackLabel);
+  const loadRubricForSubmission = useRubricStore((state) => state.loadRubricForSubmission);
+  const saveRubricForSubmission = useRubricStore((state) => state.saveRubricForSubmission);
+  
+  const selectedSubmission = useCanvasStore((state) => state.selectedSubmission);
+  const selectedAssignment = useCanvasStore((state) => state.selectedAssignment);
 
   const [commentFocused, setCommentFocused] = useState(false);
   const commentRef = useRef(null);
+  // Local state for comment to keep input responsive - sync to store on blur/debounce
+  const [localComment, setLocalComment] = useState('');
+  const commentSyncTimeoutRef = useRef(null);
+  // Local state for feedback label to keep input responsive
+  const [localFeedbackLabel, setLocalFeedbackLabel] = useState('');
   const [levelDialogOpen, setLevelDialogOpen] = useState(false);
   const [levelDialogMode, setLevelDialogMode] = useState('add');
   const [levelForm, setLevelForm] = useState({
@@ -112,10 +117,44 @@ const RubricDisplay = () => {
   const [expandedDescriptions, setExpandedDescriptions] = useState({});
   const [editingLevels, setEditingLevels] = useState({});
   const previousSubmissionRef = useRef(null);
+  const saveTimeoutRef = useRef(null);
+  const saveRubricForSubmissionRef = useRef(saveRubricForSubmission);
+  const feedbackLabelTimeoutRef = useRef(null);
+  const lastSavedRubricRef = useRef(null);
+
+  // Keep ref updated with latest function
+  useEffect(() => {
+    saveRubricForSubmissionRef.current = saveRubricForSubmission;
+  }, [saveRubricForSubmission]);
 
   // Get criterion safely - will be null if no rubric
   const criterion = currentRubric?.criteria?.[currentCriterionIndex] || null;
   const totalCriteria = currentRubric?.criteria?.length || 0;
+  
+  // Sync local comment state when criterion changes (e.g., navigating between criteria)
+  useEffect(() => {
+    if (criterion?.comment !== undefined) {
+      setLocalComment(criterion.comment || '');
+    }
+  }, [criterion?.comment, currentCriterionIndex]);
+  
+  // Sync local feedback label when rubric changes
+  useEffect(() => {
+    if (currentRubric?.feedbackLabel !== undefined) {
+      setLocalFeedbackLabel(currentRubric.feedbackLabel || '');
+    }
+  }, [currentRubric?.feedbackLabel]);
+
+  // Debounced save function to avoid expensive localStorage writes on every keystroke
+  const debouncedSaveRubricForSubmission = useCallback((assignmentId, submissionId) => {
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+    saveTimeoutRef.current = setTimeout(() => {
+      saveRubricForSubmissionRef.current(assignmentId, submissionId);
+      saveTimeoutRef.current = null;
+    }, 500); // 500ms debounce - saves after user stops typing for half a second
+  }, []);
 
   // Sync rubric with selected submission
   useEffect(() => {
@@ -142,13 +181,38 @@ const RubricDisplay = () => {
     }
   }, [selectedSubmission?.user_id, selectedSubmission?.id, selectedAssignment?.id, availableRubrics.length]);
 
-  // Save rubric state when it changes
+  // Save rubric state when it changes (debounced to avoid expensive writes on every keystroke)
+  // Use a ref to track if we've already scheduled a save to prevent multiple debounced calls
   useEffect(() => {
     if (!currentRubric || !selectedSubmission || !selectedAssignment) return;
     
     const submissionId = String(selectedSubmission.user_id || selectedSubmission.id);
-    saveRubricForSubmission(selectedAssignment.id, submissionId);
-  }, [currentRubric?.criteria, currentRubric?.feedbackLabel, selectedSubmission?.user_id, selectedAssignment?.id]);
+    const assignmentId = selectedAssignment.id;
+    const saveKey = `${assignmentId}-${submissionId}`;
+    
+    // Only schedule a save if:
+    // 1. This is a different submission (need to save the new one), OR
+    // 2. We haven't scheduled a save yet (timeout was cleared or never set)
+    const lastSaveKey = lastSavedRubricRef.current?.saveKey;
+    const hasPendingSave = saveTimeoutRef.current !== null;
+    
+    if (saveKey !== lastSaveKey || !hasPendingSave) {
+      lastSavedRubricRef.current = { saveKey };
+      debouncedSaveRubricForSubmission(assignmentId, submissionId);
+    }
+    
+    // Cleanup timeout on unmount or when dependencies change
+    return () => {
+      // Don't clear timeout here - let the debounce complete
+      // Only clear on unmount or submission change
+      if (saveKey !== lastSavedRubricRef.current?.saveKey) {
+        if (saveTimeoutRef.current) {
+          clearTimeout(saveTimeoutRef.current);
+          saveTimeoutRef.current = null;
+        }
+      }
+    };
+  }, [currentRubric, selectedSubmission?.user_id, selectedAssignment?.id, debouncedSaveRubricForSubmission]);
 
   const currentTotalPossible = useMemo(
     () => calculatePossiblePoints(currentRubric?.criteria || []),
@@ -158,11 +222,7 @@ const RubricDisplay = () => {
   const handleLevelSelect = (levelIndex) => {
     if (!currentRubric) return;
     selectLevel(currentCriterionIndex, levelIndex);
-    // Save rubric state after selection
-    if (selectedSubmission && selectedAssignment) {
-      const submissionId = String(selectedSubmission.user_id || selectedSubmission.id);
-      saveRubricForSubmission(selectedAssignment.id, submissionId);
-    }
+    // No need to call saveRubricForSubmission here - the useEffect will handle it (debounced)
     // Auto-advance to next criterion after selection
     if (autoAdvance) {
       setTimeout(() => {
@@ -175,11 +235,29 @@ const RubricDisplay = () => {
 
   const handleCommentChange = (e) => {
     if (!currentRubric) return;
-    updateComment(currentCriterionIndex, e.target.value);
-    // Save rubric state after comment change
-    if (selectedSubmission && selectedAssignment) {
-      const submissionId = String(selectedSubmission.user_id || selectedSubmission.id);
-      saveRubricForSubmission(selectedAssignment.id, submissionId);
+    const value = e.target.value;
+    // Update local state immediately for responsive input
+    setLocalComment(value);
+    
+    // Debounce store update to avoid blocking the input
+    if (commentSyncTimeoutRef.current) {
+      clearTimeout(commentSyncTimeoutRef.current);
+    }
+    commentSyncTimeoutRef.current = setTimeout(() => {
+      updateComment(currentCriterionIndex, value);
+      commentSyncTimeoutRef.current = null;
+    }, 300); // 300ms debounce - faster than save debounce
+  };
+  
+  const handleCommentBlur = () => {
+    setCommentFocused(false);
+    // Sync to store immediately on blur
+    if (commentSyncTimeoutRef.current) {
+      clearTimeout(commentSyncTimeoutRef.current);
+      commentSyncTimeoutRef.current = null;
+    }
+    if (currentRubric && localComment !== (criterion?.comment || '')) {
+      updateComment(currentCriterionIndex, localComment);
     }
   };
 
@@ -276,11 +354,18 @@ const RubricDisplay = () => {
 
   const handleDraftCriterionChange = (index, field) => (event) => {
     const value = event.target.value;
-    setDraftCriteria((prev) => {
-      const updated = cloneCriteria(prev);
-      if (!updated[index]) return prev;
-      updated[index][field] = value;
-      return updated;
+    // Use startTransition to keep input responsive
+    startTransition(() => {
+      setDraftCriteria((prev) => {
+        // Optimize: only clone the specific criterion being changed, not all criteria
+        if (!prev[index]) return prev;
+        const updated = [...prev];
+        updated[index] = {
+          ...updated[index],
+          [field]: value,
+        };
+        return updated;
+      });
     });
   };
 
@@ -360,19 +445,22 @@ const RubricDisplay = () => {
 
   const handleLevelFieldChange = (criterionIndex, levelIndex, field) => (event) => {
     const value = event.target.value;
-    setEditingLevels((prev) => {
-      const cloned = { ...prev };
-      const targetLevels = cloneLevels(cloned[criterionIndex] || cloneLevels(draftCriteria[criterionIndex]?.levels || []));
-      if (!targetLevels[levelIndex]) {
-        targetLevels[levelIndex] = { name: '', description: '', points: 0 };
-      }
-      if (field === 'points') {
+    // Use startTransition to keep input responsive
+    startTransition(() => {
+      setEditingLevels((prev) => {
+        // Optimize: only clone the specific level being changed, not all levels
+        const cloned = { ...prev };
+        const existingLevels = cloned[criterionIndex] || (draftCriteria[criterionIndex]?.levels || []).map(l => ({ ...l }));
+        const targetLevels = [...existingLevels];
+        if (!targetLevels[levelIndex]) {
+          targetLevels[levelIndex] = { name: '', description: '', points: 0 };
+        } else {
+          targetLevels[levelIndex] = { ...targetLevels[levelIndex] };
+        }
         targetLevels[levelIndex][field] = value;
-      } else {
-        targetLevels[levelIndex][field] = value;
-      }
-      cloned[criterionIndex] = targetLevels;
-      return cloned;
+        cloned[criterionIndex] = targetLevels;
+        return cloned;
+      });
     });
   };
 
@@ -691,8 +779,43 @@ const RubricDisplay = () => {
         {currentCriterionIndex === 0 && (
           <TextField
             label="Student Name (optional)"
-            value={currentRubric.feedbackLabel || ''}
-            onChange={(e) => updateFeedbackLabel(e.target.value)}
+            value={localFeedbackLabel}
+            onChange={(e) => {
+              const value = e.target.value;
+              // Update local state immediately for responsive input
+              setLocalFeedbackLabel(value);
+              
+              // Debounce store update to avoid blocking the input
+              if (feedbackLabelTimeoutRef.current) {
+                clearTimeout(feedbackLabelTimeoutRef.current);
+              }
+              feedbackLabelTimeoutRef.current = setTimeout(() => {
+                const store = useRubricStore.getState();
+                if (store.currentRubric) {
+                  useRubricStore.setState({ 
+                    currentRubric: { ...store.currentRubric, feedbackLabel: value } 
+                  });
+                  store.saveSession();
+                  store.persistCurrentRubric();
+                }
+                feedbackLabelTimeoutRef.current = null;
+              }, 300); // 300ms debounce
+            }}
+            onBlur={() => {
+              // Sync to store immediately on blur
+              if (feedbackLabelTimeoutRef.current) {
+                clearTimeout(feedbackLabelTimeoutRef.current);
+                feedbackLabelTimeoutRef.current = null;
+              }
+              const store = useRubricStore.getState();
+              if (store.currentRubric && localFeedbackLabel !== (store.currentRubric.feedbackLabel || '')) {
+                useRubricStore.setState({ 
+                  currentRubric: { ...store.currentRubric, feedbackLabel: localFeedbackLabel } 
+                });
+                store.saveSession();
+                store.persistCurrentRubric();
+              }
+            }}
             size="small"
             fullWidth
             sx={{ mb: 2 }}
@@ -824,10 +947,10 @@ const RubricDisplay = () => {
             multiline
             rows={2}
             label="Additional Comment (Press C to focus)"
-            value={criterion.comment}
+            value={localComment}
             onChange={handleCommentChange}
             onFocus={() => setCommentFocused(true)}
-            onBlur={() => setCommentFocused(false)}
+            onBlur={handleCommentBlur}
             inputRef={commentRef}
             placeholder="Optional feedback for this criterion..."
           />

@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import pLimit from 'p-limit';
 import pRetry from 'p-retry';
+import confetti from 'canvas-confetti';
 import {
   cachePdf,
   getCachedPdf,
@@ -72,6 +73,64 @@ const filterAssignments = (assignments = [], groupId = 'all') => {
   });
 };
 
+/**
+ * Centralized function to enrich submissions with staged grades, rubric scores, and grading status.
+ * This is the single source of truth for enrichment logic to prevent inconsistencies.
+ * 
+ * @param {Array} submissions - Array of submission objects
+ * @param {Object} stagedGrades - Map of assignmentId -> { submissionId -> { grade, feedback } }
+ * @param {Object} rubricScores - Map of assignmentId -> { submissionId -> scoreData }
+ * @param {string|null} assignmentId - Current assignment ID
+ * @returns {Array} Enriched submissions array
+ */
+const enrichSubmissions = (submissions, stagedGrades, rubricScores, assignmentId) => {
+  if (!submissions || submissions.length === 0) return submissions;
+  if (!assignmentId) return submissions;
+
+  const assignmentStagedGrades = stagedGrades[assignmentId] || {};
+  const assignmentRubricScores = rubricScores[assignmentId] || {};
+
+  return submissions.map(sub => {
+    const submissionId = String(sub.user_id || sub.id);
+    const hasStagedGrade = assignmentStagedGrades[submissionId] !== undefined;
+    const hasRubricScore = assignmentRubricScores[submissionId] !== undefined;
+
+    // Re-calculate isGraded based on current staged grades and Canvas grade
+    // This ensures we always have the latest status
+    const isGradedInCanvas = (sub.canvasGrade !== null && sub.canvasGrade !== undefined) && !sub.isAutoGradedZero;
+    const isGraded = isGradedInCanvas || hasStagedGrade;
+
+    // If we have a staged grade, update the submission with it
+    if (hasStagedGrade) {
+      return {
+        ...sub,
+        isGraded: isGraded,
+        stagedGrade: assignmentStagedGrades[submissionId],
+        rubricScore: assignmentRubricScores[submissionId] || sub.rubricScore || null,
+      };
+    }
+
+    // If we have a rubric score but no staged grade, update rubricScore
+    if (hasRubricScore && !sub.rubricScore) {
+      return {
+        ...sub,
+        isGraded: isGraded,
+        rubricScore: assignmentRubricScores[submissionId],
+      };
+    }
+
+    // Ensure isGraded is correct even if no staged grade or rubric score
+    if (sub.isGraded !== isGraded) {
+      return {
+        ...sub,
+        isGraded: isGraded,
+      };
+    }
+
+    return sub;
+  });
+};
+
 const useCanvasStore = create((set, get) => ({
   // Canvas API configuration
   apiToken: null,
@@ -115,6 +174,7 @@ const useCanvasStore = create((set, get) => ({
   sortBy: 'all', // 'all' | 'graded' | 'ungraded' - default to 'all' to show all submissions
   rubricScores: {}, // Map of assignmentId -> { submissionId -> scoreData }
   stagedGrades: {}, // Map of assignmentId -> { submissionId -> { grade, feedback } }
+  confettiShownForAssignment: null, // Track which assignment we've shown confetti for
   
   // Loading states
   loadingCourses: false,
@@ -811,6 +871,9 @@ const useCanvasStore = create((set, get) => ({
       return;
     }
 
+    // Reset confetti flag when selecting a new assignment
+    set({ confettiShownForAssignment: null });
+
     // Generate unique request ID for this assignment selection
     const requestId = `${assignment.id}_${Date.now()}`;
 
@@ -957,13 +1020,29 @@ const useCanvasStore = create((set, get) => ({
         const isGradedInCanvas = (canvasGrade !== null && canvasGrade !== undefined) && !isAutoGradedZero;
         const hasRubricScore = rubricScores[submissionId] !== undefined;
         const hasStagedGrade = stagedGrades[submissionId] !== undefined;
+        const isGraded = isGradedInCanvas || hasStagedGrade;
+
+        // Debug logging for submissions with staged grades
+        if (hasStagedGrade) {
+          console.log(`[fetchSubmissions] Enriching submission ${submissionId}:`, {
+            submissionId,
+            isGradedInCanvas,
+            hasStagedGrade,
+            isGraded,
+            stagedGradeData: stagedGrades[submissionId],
+            canvasGrade,
+            isAutoGradedZero,
+            subUserId: sub.user_id,
+            subId: sub.id,
+          });
+        }
 
         // Determine submission status
         const status = isLate ? 'late' : (isAutoGradedZero ? 'auto-graded' : null);
 
         return {
           ...sub,
-          isGraded: isGradedInCanvas || hasStagedGrade,
+          isGraded: isGraded,
           canvasGrade: canvasGrade,
           canvasScore: canvasScore,
           rubricScore: rubricScores[submissionId] || null,
@@ -1156,7 +1235,8 @@ const useCanvasStore = create((set, get) => ({
     });
     console.log(`[saveRubricScoreForSubmission] First 2 lines of feedback for submission ${submissionId}:`, firstTwoLines);
 
-    // Single atomic state update for both rubric scores and staged grades
+    // Only update metadata (rubricScores and stagedGrades) - don't touch arrays
+    // applySorting will handle enriching and updating arrays based on this metadata
     set((state) => {
       const assignmentId = selectedAssignment.id;
 
@@ -1177,35 +1257,68 @@ const useCanvasStore = create((set, get) => ({
         feedback,
       };
 
-      // Update submission in both filtered and unfiltered lists
-      const updateSubmission = (sub) => {
-        if (String(sub.user_id || sub.id) === submissionId) {
-          return {
-            ...sub,
-            isGraded: true,
-            rubricScore: scoreData,
-            stagedGrade: {
-              grade: score.toString(),
-              feedback,
-            },
-          };
-        }
-        return sub;
-      };
-
-      const updatedSubmissions = state.submissions.map(updateSubmission);
-      const updatedAllSubmissions = state.allSubmissions.map(updateSubmission);
+      debugLog(`[saveRubricScoreForSubmission] Updated metadata for submission ${submissionId}:`, {
+        assignmentId,
+        submissionId,
+        grade: score.toString(),
+        feedbackLength: feedback?.length || 0,
+      });
 
       return {
         rubricScores: newRubricScores,
         stagedGrades: newStagedGrades,
-        submissions: updatedSubmissions,
-        allSubmissions: updatedAllSubmissions,
+        // NO array updates here - applySorting will handle that
       };
     });
     
-    // Re-apply sorting to update the list
+    // Re-apply sorting to enrich and update arrays based on updated metadata
     get().applySorting();
+    
+    // Check if all submissions are now graded and trigger confetti
+    // Use setTimeout to ensure applySorting has completed and state is updated
+    setTimeout(() => {
+      const { allSubmissions, selectedAssignment, confettiShownForAssignment } = get();
+      if (selectedAssignment && allSubmissions.length > 0) {
+        const assignmentId = selectedAssignment.id;
+        const allGraded = allSubmissions.every(sub => sub.isGraded && !sub.isAutoGradedZero);
+        
+        // Only show confetti if all are graded AND we haven't shown it for this assignment yet
+        if (allGraded && confettiShownForAssignment !== assignmentId) {
+          // Mark that we've shown confetti for this assignment
+          set({ confettiShownForAssignment: assignmentId });
+          
+          // Trigger confetti from both sides of the window
+          const duration = 3000;
+          const end = Date.now() + duration;
+          
+          const triggerConfetti = () => {
+            if (Date.now() > end) return;
+            
+            // Left side confetti
+            confetti({
+              particleCount: 50,
+              angle: 60,
+              spread: 55,
+              origin: { x: 0, y: 0.5 },
+              colors: ['#FFD700', '#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8'],
+            });
+            
+            // Right side confetti
+            confetti({
+              particleCount: 50,
+              angle: 120,
+              spread: 55,
+              origin: { x: 1, y: 0.5 },
+              colors: ['#FFD700', '#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8'],
+            });
+            
+            requestAnimationFrame(triggerConfetti);
+          };
+          
+          triggerConfetti();
+        }
+      }
+    }, 100); // Small delay to ensure applySorting has completed
   },
 
   // Unstage grade for current submission
@@ -1223,7 +1336,8 @@ const useCanvasStore = create((set, get) => ({
     // Remove from localStorage
     unstageGrade(assignmentId, submissionId);
     
-    // Update store state
+    // Only update metadata (stagedGrades) - don't touch arrays
+    // applySorting will handle enriching and updating arrays based on this metadata
     set((state) => {
       let newStagedGrades = { ...state.stagedGrades };
       if (newStagedGrades[assignmentId]) {
@@ -1239,31 +1353,15 @@ const useCanvasStore = create((set, get) => ({
         }
       }
       
-      // Update submission objects to reflect unstaged status
-      const updateSubmission = (sub) => {
-        if (String(sub.user_id || sub.id) === submissionId) {
-          // Check if it's graded in Canvas (not just staged)
-          const isGradedInCanvas = sub.canvasGrade !== null && sub.canvasGrade !== undefined && !sub.isAutoGradedZero;
-          return {
-            ...sub,
-            isGraded: isGradedInCanvas,
-            stagedGrade: null,
-          };
-        }
-        return sub;
-      };
-      
-      const updatedSubmissions = state.submissions.map(updateSubmission);
-      const updatedAllSubmissions = state.allSubmissions.map(updateSubmission);
+      debugLog(`[unstageGradeForSubmission] Removed staged grade for submission ${submissionId}`);
       
       return {
         stagedGrades: newStagedGrades,
-        submissions: updatedSubmissions,
-        allSubmissions: updatedAllSubmissions,
+        // NO array updates here - applySorting will handle that
       };
     });
     
-    // Re-apply sorting to update the list
+    // Re-apply sorting to enrich and update arrays based on updated metadata
     get().applySorting();
     
     debugLog(`[unstageGradeForSubmission] Unstaged grade for submission ${submissionId}`);
@@ -1277,12 +1375,38 @@ const useCanvasStore = create((set, get) => ({
 
   // Apply sorting to submissions (for display only, doesn't affect allSubmissions)
   applySorting: () => {
-    const { allSubmissions, sortBy } = get();
+    const { allSubmissions, sortBy, stagedGrades, selectedAssignment, rubricScores } = get();
     debugLog('[applySorting] Starting with allSubmissions:', allSubmissions.length, 'sortBy:', sortBy);
     if (!allSubmissions.length) return;
 
-    // Start with all submissions, then filter/sort for display
-    let sorted = [...allSubmissions];
+    // Use centralized enrichment function - single source of truth
+    const assignmentId = selectedAssignment?.id;
+    const enriched = enrichSubmissions(allSubmissions, stagedGrades, rubricScores, assignmentId);
+
+    // Start with enriched submissions, then filter/sort for display
+    let sorted = [...enriched];
+    
+    // Debug: Check for submissions with staged grades
+    if (selectedAssignment) {
+      const assignmentStagedGrades = stagedGrades[selectedAssignment.id] || {};
+      const stagedSubmissionIds = Object.keys(assignmentStagedGrades);
+      if (stagedSubmissionIds.length > 0) {
+        console.log(`[applySorting] Found ${stagedSubmissionIds.length} staged grades for assignment ${selectedAssignment.id}`);
+        stagedSubmissionIds.forEach(subId => {
+          const sub = sorted.find(s => String(s.user_id || s.id) === subId);
+          if (sub) {
+            console.log(`[applySorting] Submission ${subId} in sorted array:`, {
+              submissionId: subId,
+              isGraded: sub.isGraded,
+              hasStagedGrade: !!sub.stagedGrade,
+              stagedGradeGrade: sub.stagedGrade?.grade,
+            });
+          } else {
+            console.warn(`[applySorting] Staged submission ${subId} not found in sorted array!`);
+          }
+        });
+      }
+    }
 
     if (sortBy === 'ungraded') {
       // Show ungraded submissions (including auto-graded zeros)
@@ -1322,9 +1446,11 @@ const useCanvasStore = create((set, get) => ({
       }
     }
 
-    // Single atomic state update for both submissions and index
+    // Single atomic state update for both submissions, allSubmissions, and index
+    // Update allSubmissions with enriched data so StudentSelector dropdown sees the updates
     set({
       submissions: sorted,
+      allSubmissions: enriched, // Update allSubmissions with enriched data
       submissionIndex: newIndex
     });
   },
