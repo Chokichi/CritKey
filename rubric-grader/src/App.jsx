@@ -25,6 +25,7 @@ import DockableRubricWindow from './components/DockableRubricWindow';
 import DockedRubricPanel from './components/DockedRubricPanel';
 import TotalPoints from './components/TotalPoints';
 import ShortcutsModal from './components/ShortcutsModal';
+import BatchPushDrawer from './components/BatchPushDrawer';
 import { getRubricWindowState, saveRubricWindowState } from './utils/localStorage';
 
 const theme = createTheme({
@@ -32,9 +33,18 @@ const theme = createTheme({
     mode: 'light',
     primary: {
       main: '#1976d2',
+      lighter: '#e3f2fd',
     },
     secondary: {
       main: '#dc004e',
+    },
+    success: {
+      main: '#2e7d32',
+      lighter: '#e8f5e9',
+    },
+    error: {
+      main: '#d32f2f',
+      lighter: '#ffebee',
     },
   },
 });
@@ -441,6 +451,9 @@ function App() {
 
         {/* Shortcuts Modal */}
         <ShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+
+        {/* Batch Push Progress Drawer */}
+        <BatchPushDrawer />
       </Box>
     </ThemeProvider>
   );

@@ -25,6 +25,7 @@ import {
   CheckCircle,
   RadioButtonUnchecked,
   CloudUpload,
+  DeleteSweep,
 } from '@mui/icons-material';
 import useCanvasStore from '../store/canvasStore';
 
@@ -41,8 +42,10 @@ const StudentSelector = () => {
   const selectedAssignment = useCanvasStore((state) => state.selectedAssignment);
   const pushAllStagedGrades = useCanvasStore((state) => state.pushAllStagedGrades);
   const pushingGrades = useCanvasStore((state) => state.pushingGrades);
-  
+  const clearAllStagedGradesForAssignment = useCanvasStore((state) => state.clearAllStagedGradesForAssignment);
+
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
+  const [clearConfirmDialogOpen, setClearConfirmDialogOpen] = useState(false);
   const [includeComments, setIncludeComments] = useState(true); // Default to including comments
 
   // Memoize expensive computations
@@ -155,6 +158,19 @@ const StudentSelector = () => {
 
   const handleCancelPush = () => {
     setConfirmDialogOpen(false);
+  };
+
+  const handleClearAllGrades = () => {
+    setClearConfirmDialogOpen(true);
+  };
+
+  const handleConfirmClear = () => {
+    setClearConfirmDialogOpen(false);
+    clearAllStagedGradesForAssignment();
+  };
+
+  const handleCancelClear = () => {
+    setClearConfirmDialogOpen(false);
   };
 
   const getStudentName = (submission) => {
@@ -317,18 +333,32 @@ const StudentSelector = () => {
         </ToggleButtonGroup>
 
         {stagedCount > 0 && (
-          <Tooltip title={`Push ${stagedCount} staged grade${stagedCount !== 1 ? 's' : ''} to Canvas`}>
-            <span>
-              <IconButton
-                color="primary"
-                onClick={handlePushGrades}
-                disabled={pushingGrades}
-                size="small"
-              >
-                <CloudUpload />
-              </IconButton>
-            </span>
-          </Tooltip>
+          <>
+            <Tooltip title={`Push ${stagedCount} staged grade${stagedCount !== 1 ? 's' : ''} to Canvas`}>
+              <span>
+                <IconButton
+                  color="primary"
+                  onClick={handlePushGrades}
+                  disabled={pushingGrades}
+                  size="small"
+                >
+                  <CloudUpload />
+                </IconButton>
+              </span>
+            </Tooltip>
+            <Tooltip title="Clear all staged grades">
+              <span>
+                <IconButton
+                  color="error"
+                  onClick={handleClearAllGrades}
+                  disabled={pushingGrades}
+                  size="small"
+                >
+                  <DeleteSweep />
+                </IconButton>
+              </span>
+            </Tooltip>
+          </>
         )}
       </Box>
 
@@ -338,7 +368,7 @@ const StudentSelector = () => {
         </Typography>
       )}
 
-      {/* Confirmation Dialog */}
+      {/* Push Confirmation Dialog */}
       <Dialog
         open={confirmDialogOpen}
         onClose={handleCancelPush}
@@ -404,6 +434,57 @@ const StudentSelector = () => {
             disabled={pushingGrades}
           >
             {pushingGrades ? 'Pushing...' : `Push ${stagedCount} Grade${stagedCount !== 1 ? 's' : ''}`}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Clear All Confirmation Dialog */}
+      <Dialog
+        open={clearConfirmDialogOpen}
+        onClose={handleCancelClear}
+        PaperProps={{
+          sx: { zIndex: 1400 }
+        }}
+      >
+        <DialogTitle>
+          Reset All Grading for This Assignment?
+        </DialogTitle>
+        <DialogContent>
+          <Alert severity="error" sx={{ mb: 2 }}>
+            <Typography variant="body2" fontWeight="medium">
+              This will completely reset all grading data for this assignment.
+            </Typography>
+          </Alert>
+          <Box sx={{ mb: 2 }}>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+              This action will:
+            </Typography>
+            <Box component="ul" sx={{ marginTop: 1, marginBottom: 1, paddingLeft: 3 }}>
+              <Typography component="li" variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>
+                Clear all {stagedCount} staged grade{stagedCount !== 1 ? 's' : ''}
+              </Typography>
+              <Typography component="li" variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>
+                Clear all rubric scores and selections
+              </Typography>
+              <Typography component="li" variant="body2" color="text.secondary">
+                Reset submissions to "ungraded" status
+              </Typography>
+            </Box>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+              This action cannot be undone. Use this if you need to re-grade with a different rubric.
+            </Typography>
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCancelClear}>
+            Cancel
+          </Button>
+          <Button
+            onClick={handleConfirmClear}
+            variant="contained"
+            color="error"
+          >
+            Reset All Grading
           </Button>
         </DialogActions>
       </Dialog>

@@ -462,6 +462,21 @@ export const clearStagedGrades = (assignmentId) => {
 };
 
 /**
+ * Clear rubric scores for an assignment (for re-grading)
+ * @param {string} assignmentId
+ */
+export const clearRubricScores = (assignmentId) => {
+  try {
+    const data = localStorage.getItem(STORAGE_KEYS.RUBRIC_SCORES);
+    const allScores = data ? JSON.parse(data) : {};
+    delete allScores[assignmentId];
+    localStorage.setItem(STORAGE_KEYS.RUBRIC_SCORES, JSON.stringify(allScores));
+  } catch (error) {
+    console.error('Error clearing rubric scores from localStorage:', error);
+  }
+};
+
+/**
  * Get all staged grades (across all assignments)
  * @returns {Object} Map of assignmentId -> { submissionId -> { grade, feedback } }
  */

@@ -19,6 +19,7 @@ import {
   stageGrade,
   unstageGrade,
   clearStagedGrades,
+  clearRubricScores,
 } from '../utils/localStorage';
 import {
   setSecureItem,
@@ -1286,36 +1287,59 @@ const useCanvasStore = create((set, get) => ({
         if (allGraded && confettiShownForAssignment !== assignmentId) {
           // Mark that we've shown confetti for this assignment
           set({ confettiShownForAssignment: assignmentId });
-          
-          // Trigger confetti from both sides of the window
-          const duration = 3000;
-          const end = Date.now() + duration;
-          
-          const triggerConfetti = () => {
-            if (Date.now() > end) return;
-            
-            // Left side confetti
-            confetti({
-              particleCount: 50,
-              angle: 60,
-              spread: 55,
-              origin: { x: 0, y: 0.5 },
-              colors: ['#FFD700', '#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8'],
-            });
-            
-            // Right side confetti
-            confetti({
-              particleCount: 50,
-              angle: 120,
-              spread: 55,
-              origin: { x: 1, y: 0.5 },
-              colors: ['#FFD700', '#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8'],
-            });
-            
-            requestAnimationFrame(triggerConfetti);
+
+          // Trigger cannon-style confetti bursts alternating left to right
+          // 3 shots from each side = 6 total bursts
+          const colors = ['#FFD700', '#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8'];
+          let burstCount = 0;
+          const totalBursts = 6; // 3 from left, 3 from right
+
+          const fireCannonBurst = () => {
+            if (burstCount >= totalBursts) return;
+
+            // Alternate: even bursts from left, odd bursts from right
+            const fromLeft = burstCount % 2 === 0;
+
+            if (fromLeft) {
+              // Left side cannon burst
+              confetti({
+                particleCount: 100,
+                angle: 45,
+                spread: 30,
+                origin: { x: 0.05, y: 0.6 },
+                colors: colors,
+                startVelocity: 80,
+                gravity: 0.8,
+                scalar: 1.2,
+                drift: 0,
+                ticks: 400,
+              });
+            } else {
+              // Right side cannon burst
+              confetti({
+                particleCount: 100,
+                angle: 135,
+                spread: 30,
+                origin: { x: 0.95, y: 0.6 },
+                colors: colors,
+                startVelocity: 80,
+                gravity: 0.8,
+                scalar: 1.2,
+                drift: 0,
+                ticks: 400,
+              });
+            }
+
+            burstCount++;
+
+            // Schedule next burst after 300ms
+            if (burstCount < totalBursts) {
+              setTimeout(fireCannonBurst, 300);
+            }
           };
-          
-          triggerConfetti();
+
+          // Start the first burst
+          fireCannonBurst();
         }
       }
     }, 100); // Small delay to ensure applySorting has completed
@@ -1325,17 +1349,17 @@ const useCanvasStore = create((set, get) => ({
   unstageGradeForSubmission: () => {
     const { selectedAssignment, selectedSubmission, stagedGrades } = get();
     if (!selectedAssignment || !selectedSubmission) return;
-    
+
     const submissionId = String(selectedSubmission.user_id || selectedSubmission.id);
     const assignmentId = selectedAssignment.id;
-    
+
     // Check if there's actually a staged grade
     const hasStagedGrade = stagedGrades[assignmentId]?.[submissionId];
     if (!hasStagedGrade) return;
-    
+
     // Remove from localStorage
     unstageGrade(assignmentId, submissionId);
-    
+
     // Only update metadata (stagedGrades) - don't touch arrays
     // applySorting will handle enriching and updating arrays based on this metadata
     set((state) => {
@@ -1352,19 +1376,66 @@ const useCanvasStore = create((set, get) => ({
           newStagedGrades[assignmentId] = assignmentStaged;
         }
       }
-      
+
       debugLog(`[unstageGradeForSubmission] Removed staged grade for submission ${submissionId}`);
-      
+
       return {
         stagedGrades: newStagedGrades,
         // NO array updates here - applySorting will handle that
       };
     });
-    
+
     // Re-apply sorting to enrich and update arrays based on updated metadata
     get().applySorting();
-    
+
     debugLog(`[unstageGradeForSubmission] Unstaged grade for submission ${submissionId}`);
+  },
+
+  clearAllStagedGradesForAssignment: () => {
+    const { selectedAssignment, stagedGrades, rubricScores } = get();
+    if (!selectedAssignment) return;
+
+    const assignmentId = selectedAssignment.id;
+    const assignmentStagedGrades = stagedGrades[assignmentId];
+    const assignmentRubricScores = rubricScores[assignmentId];
+
+    // Check if there are any staged grades or rubric scores
+    const hasStagedGrades = assignmentStagedGrades && Object.keys(assignmentStagedGrades).length > 0;
+    const hasRubricScores = assignmentRubricScores && Object.keys(assignmentRubricScores).length > 0;
+
+    if (!hasStagedGrades && !hasRubricScores) {
+      return;
+    }
+
+    // Clear both staged grades and rubric scores from localStorage
+    clearStagedGrades(assignmentId);
+    clearRubricScores(assignmentId);
+
+    // Update state metadata - clear both staged grades and rubric scores
+    set((state) => {
+      // Defensive check (unlikely but safe)
+      if (!state.stagedGrades || !state.rubricScores) {
+        debugLog('[clearAllStagedGradesForAssignment] State not properly initialized');
+        return {};
+      }
+
+      // Use destructuring to create new objects WITHOUT the assignmentId key
+      // This guarantees a clean reference change that Zustand and React will detect
+      const { [assignmentId]: removedStaged, ...newStagedGrades } = state.stagedGrades;
+      const { [assignmentId]: removedScores, ...newRubricScores } = state.rubricScores;
+
+      debugLog(`[clearAllStagedGradesForAssignment] Cleared all staged grades and rubric scores for assignment ${assignmentId}`);
+
+      return {
+        stagedGrades: newStagedGrades,
+        rubricScores: newRubricScores,
+      };
+    });
+
+    // Re-apply sorting to update arrays (submissions will be marked as ungraded)
+    get().applySorting();
+
+    debugLog(`[clearAllStagedGradesForAssignment] Successfully cleared all staged grades and rubric scores - ready for re-grading`);
   },
 
   // Set sort order
