@@ -116,6 +116,7 @@ const enrichSubmissions = (submissions, stagedGrades, rubricScores, assignmentId
       return {
         ...sub,
         isGraded: isGraded,
+        stagedGrade: undefined,
         rubricScore: assignmentRubricScores[submissionId],
       };
     }
@@ -125,6 +126,15 @@ const enrichSubmissions = (submissions, stagedGrades, rubricScores, assignmentId
       return {
         ...sub,
         isGraded: isGraded,
+        stagedGrade: undefined,
+      };
+    }
+
+    // Remove staged grade if it doesn't exist in metadata (catch-all for cleared grades)
+    if (sub.stagedGrade !== undefined && !hasStagedGrade) {
+      return {
+        ...sub,
+        stagedGrade: undefined,
       };
     }
 
