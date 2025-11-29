@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Box,
   Paper,
@@ -28,8 +28,10 @@ import {
 } from '@mui/icons-material';
 import { useHotkeys } from 'react-hotkeys-hook';
 import useRubricStore from '../store/rubricStore';
+import useCanvasStore from '../store/canvasStore';
 import { generateFeedbackText } from '../utils/csvParser';
 import { saveFeedbackToHistory, getFeedbackHistory } from '../utils/localStorage';
+import { useHotkeyConfig } from '../hooks/useHotkeyConfig';
 
 const FeedbackGenerator = () => {
   const [open, setOpen] = useState(false);
@@ -38,8 +40,22 @@ const FeedbackGenerator = () => {
   const [historyMenuAnchor, setHistoryMenuAnchor] = useState(null);
   const [feedbackHistory, setFeedbackHistory] = useState([]);
   const [snackbarOpen, setSnackbarOpen] = useState(false);
-  
-  const { currentRubric, getTotalPoints, resetGrading } = useRubricStore();
+  const [submittingToCanvas, setSubmittingToCanvas] = useState(false);
+
+  const { currentRubric, getTotalPoints, resetGrading, saveRubricForSubmission } = useRubricStore();
+  const {
+    selectedSubmission,
+    selectedAssignment,
+    saveRubricScoreForSubmission,
+    nextUngradedSubmission,
+    unstageGradeForSubmission,
+    stagedGrades,
+  } = useCanvasStore();
+
+  // Clear feedback text when submission changes to prevent stale state
+  useEffect(() => {
+    setFeedbackText('');
+  }, [selectedSubmission?.id]);
 
   const loadFeedbackHistory = () => {
     setFeedbackHistory(getFeedbackHistory());
@@ -122,20 +138,90 @@ const FeedbackGenerator = () => {
     }
   };
 
-  // Ctrl/Cmd + Enter to generate feedback
-  useHotkeys('ctrl+enter, meta+enter', () => {
+  const handleSubmitToCanvas = async () => {
+    if (!selectedSubmission || !selectedAssignment || !currentRubric) {
+      return;
+    }
+
+    setSubmittingToCanvas(true);
+    try {
+      const { earned, possible } = getTotalPoints();
+
+      // Always generate fresh feedback from current rubric state
+      const feedback = generateFeedbackText(currentRubric);
+      setFeedbackText(feedback);
+
+      // Copy to clipboard
+      try {
+        await navigator.clipboard.writeText(feedback);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      } catch (err) {
+        console.error('Failed to copy:', err);
+      }
+
+      // Save to history
+      const label = currentRubric.feedbackLabel?.trim();
+      const historyLabel = label || currentRubric.name;
+      saveFeedbackToHistory(feedback, currentRubric.name, historyLabel);
+
+      // Debug: Log the feedback being generated and staged
+      const submissionId = String(selectedSubmission.user_id || selectedSubmission.id);
+      console.log(`[FeedbackGenerator] Staging grade for submission ${submissionId}:`, {
+        assignmentId: selectedAssignment.id,
+        rubricName: currentRubric.name,
+        rubricId: currentRubric.id || 'no id',
+        feedbackLength: feedback?.length || 0,
+        feedbackPreview: feedback?.substring(0, 150) || 'no feedback',
+        grade: `${earned}/${possible}`,
+      });
+
+      // Save rubric state before staging
+      saveRubricForSubmission(selectedAssignment.id, submissionId);
+
+      // Stage the grade (don't push to Canvas yet)
+      saveRubricScoreForSubmission(`${earned}/${possible}`, feedback);
+
+      // Show success message
+      setSnackbarOpen(true);
+
+      // Auto-advance to next ungraded submission after a short delay
+      setTimeout(() => {
+        nextUngradedSubmission();
+        resetGrading();
+      }, 1000);
+    } catch (error) {
+      console.error('Failed to stage grade:', error);
+      alert(`Failed to stage grade: ${error.message}`);
+    } finally {
+      setSubmittingToCanvas(false);
+    }
+  };
+
+  const hotkeys = useHotkeyConfig();
+
+  // Generate feedback hotkey
+  useHotkeys(hotkeys.generateFeedback, () => {
     if (currentRubric && !open) {
       handleGenerateHotkey();
     }
-  }, [currentRubric, open]);
+  }, [currentRubric, open, hotkeys.generateFeedback]);
 
-  // Ctrl/Cmd + R to reset
-  useHotkeys('ctrl+r, meta+r', (e) => {
+  // Reset hotkey
+  useHotkeys(hotkeys.resetRubric, (e) => {
     if (currentRubric) {
       e.preventDefault();
       handleReset();
     }
-  }, [currentRubric]);
+  }, [currentRubric, hotkeys.resetRubric]);
+
+  // Stage grade hotkey
+  useHotkeys(hotkeys.stageGrade, (e) => {
+    if (currentRubric && selectedSubmission && !submittingToCanvas && !open) {
+      e.preventDefault();
+      handleSubmitToCanvas();
+    }
+  }, { enabled: !submittingToCanvas && !open }, [currentRubric, selectedSubmission, submittingToCanvas, open, hotkeys.stageGrade]);
 
   if (!currentRubric) {
     return null;
@@ -188,6 +274,44 @@ const FeedbackGenerator = () => {
               <RefreshIcon />
             </IconButton>
           </Stack>
+          {selectedSubmission && (
+            <>
+              <Button
+                variant="contained"
+                onClick={handleSubmitToCanvas}
+                disabled={submittingToCanvas || (earned === 0 && possible === 0)}
+                color="success"
+                fullWidth
+                size="large"
+              >
+                {submittingToCanvas ? 'Staging...' : 'Stage Grade (S)'}
+              </Button>
+              {(() => {
+                const submissionId = String(selectedSubmission.user_id || selectedSubmission.id);
+                const assignmentId = selectedAssignment?.id;
+                const hasStagedGrade = assignmentId && stagedGrades[assignmentId]?.[submissionId];
+                
+                if (hasStagedGrade) {
+                  return (
+                    <Button
+                      variant="outlined"
+                      onClick={() => {
+                        if (window.confirm('Are you sure you want to delete the staged grade for this submission?')) {
+                          unstageGradeForSubmission();
+                        }
+                      }}
+                      color="error"
+                      fullWidth
+                      size="medium"
+                    >
+                      Delete Staged Grade
+                    </Button>
+                  );
+                }
+                return null;
+              })()}
+            </>
+          )}
         </Stack>
       </Paper>
 
@@ -254,6 +378,9 @@ const FeedbackGenerator = () => {
       <Dialog
         open={open}
         onClose={handleClose}
+        PaperProps={{
+          sx: { zIndex: 1400 }
+        }}
         maxWidth="md"
         fullWidth
       >
@@ -293,7 +420,7 @@ const FeedbackGenerator = () => {
             Close
           </Button>
           <Button
-            variant="contained"
+            variant="outlined"
             startIcon={copied ? <CheckIcon /> : <CopyIcon />}
             onClick={handleCopy}
             color={copied ? 'success' : 'primary'}

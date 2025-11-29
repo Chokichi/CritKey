@@ -4,8 +4,9 @@
   "description": "CritKey - Fast rubric grading app with keyboard shortcuts",
   "private": true,
   "scripts": {
+    "postinstall": "npm install --prefix rubric-grader && npm install --prefix server",
     "build": "cd rubric-grader && npm ci && npm run build",
-    "dev": "cd rubric-grader && npm run dev",
+    "dev": "echo '\n========================================' && echo '⚠️  REMINDER: Start the backend server!' && echo '========================================' && echo 'In a separate terminal, run:' && echo '  cd server' && echo '  npm run dev' && echo '========================================\n' && cd rubric-grader && npm run dev",
     "preview": "cd rubric-grader && npm run preview"
   },
   "repository": {

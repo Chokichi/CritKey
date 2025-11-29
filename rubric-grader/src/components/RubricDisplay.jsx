@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback, startTransition } from 'react';
 import {
   Box,
   Paper,
@@ -16,6 +16,8 @@ import {
   DialogActions,
   Alert,
   Collapse,
+  Checkbox,
+  FormControlLabel,
 } from '@mui/material';
 import {
   NavigateBefore,
@@ -30,17 +32,26 @@ import {
 } from '@mui/icons-material';
 import { useHotkeys } from 'react-hotkeys-hook';
 import useRubricStore from '../store/rubricStore';
+import useCanvasStore from '../store/canvasStore';
 import { renderTextWithLatex } from '../utils/latex.jsx';
+import { useHotkeyConfig } from '../hooks/useHotkeyConfig';
 
 const calculatePossiblePoints = (criteria = []) =>
   criteria.reduce((sum, criterion) => {
-    if (!criterion?.levels?.length) return sum;
-    const maxPoints = Math.max(
-      ...criterion.levels.map((level) =>
-        Number(level?.points) || 0
-      )
-    );
-    return Number.isFinite(maxPoints) ? sum + maxPoints : sum;
+    // Use criterion.totalPoints if useCustomTotalPoints is true, otherwise use max level points
+    let criterionTotalPoints;
+    if (criterion.useCustomTotalPoints === true && criterion.totalPoints !== undefined && criterion.totalPoints !== null) {
+      criterionTotalPoints = Number(criterion.totalPoints);
+    } else if (criterion?.levels?.length > 0) {
+      criterionTotalPoints = Math.max(
+        ...criterion.levels.map((level) =>
+          Number(level?.points) || 0
+        )
+      );
+    } else {
+      criterionTotalPoints = 0;
+    }
+    return Number.isFinite(criterionTotalPoints) ? sum + criterionTotalPoints : sum;
   }, 0);
 
 const cloneLevels = (levels = []) =>
@@ -60,24 +71,37 @@ const formatPoints = (points) => {
 };
 
 const RubricDisplay = () => {
-  const {
-    currentRubric,
-    currentCriterionIndex,
-    selectLevel,
-    updateComment,
-    goToNextCriterion,
-    goToPreviousCriterion,
-    goToCriterion,
-    addLevel,
-    updateLevel,
-    deleteLevel,
-    replaceCriteria,
-    updateFeedbackLabel,
-    autoAdvance,
-  } = useRubricStore();
+  // Use granular selectors to prevent re-renders when unrelated state changes
+  // Only re-render when the specific data we need changes
+  const currentRubric = useRubricStore((state) => state.currentRubric);
+  const currentCriterionIndex = useRubricStore((state) => state.currentCriterionIndex);
+  const autoAdvance = useRubricStore((state) => state.autoAdvance);
+  const availableRubrics = useRubricStore((state) => state.availableRubrics);
+  
+  // Actions are stable references, so they won't cause re-renders
+  const selectLevel = useRubricStore((state) => state.selectLevel);
+  const updateComment = useRubricStore((state) => state.updateComment);
+  const goToNextCriterion = useRubricStore((state) => state.goToNextCriterion);
+  const goToPreviousCriterion = useRubricStore((state) => state.goToPreviousCriterion);
+  const goToCriterion = useRubricStore((state) => state.goToCriterion);
+  const addLevel = useRubricStore((state) => state.addLevel);
+  const updateLevel = useRubricStore((state) => state.updateLevel);
+  const deleteLevel = useRubricStore((state) => state.deleteLevel);
+  const replaceCriteria = useRubricStore((state) => state.replaceCriteria);
+  const updateFeedbackLabel = useRubricStore((state) => state.updateFeedbackLabel);
+  const loadRubricForSubmission = useRubricStore((state) => state.loadRubricForSubmission);
+  const saveRubricForSubmission = useRubricStore((state) => state.saveRubricForSubmission);
+  
+  const selectedSubmission = useCanvasStore((state) => state.selectedSubmission);
+  const selectedAssignment = useCanvasStore((state) => state.selectedAssignment);
 
   const [commentFocused, setCommentFocused] = useState(false);
   const commentRef = useRef(null);
+  // Local state for comment to keep input responsive - sync to store on blur/debounce
+  const [localComment, setLocalComment] = useState('');
+  const commentSyncTimeoutRef = useRef(null);
+  // Local state for feedback label to keep input responsive
+  const [localFeedbackLabel, setLocalFeedbackLabel] = useState('');
   const [levelDialogOpen, setLevelDialogOpen] = useState(false);
   const [levelDialogMode, setLevelDialogMode] = useState('add');
   const [levelForm, setLevelForm] = useState({
@@ -92,10 +116,103 @@ const RubricDisplay = () => {
   const [draggedCriterionIndex, setDraggedCriterionIndex] = useState(null);
   const [expandedDescriptions, setExpandedDescriptions] = useState({});
   const [editingLevels, setEditingLevels] = useState({});
+  const previousSubmissionRef = useRef(null);
+  const saveTimeoutRef = useRef(null);
+  const saveRubricForSubmissionRef = useRef(saveRubricForSubmission);
+  const feedbackLabelTimeoutRef = useRef(null);
+  const lastSavedRubricRef = useRef(null);
+
+  // Keep ref updated with latest function
+  useEffect(() => {
+    saveRubricForSubmissionRef.current = saveRubricForSubmission;
+  }, [saveRubricForSubmission]);
 
   // Get criterion safely - will be null if no rubric
   const criterion = currentRubric?.criteria?.[currentCriterionIndex] || null;
   const totalCriteria = currentRubric?.criteria?.length || 0;
+  
+  // Sync local comment state when criterion changes (e.g., navigating between criteria)
+  useEffect(() => {
+    if (criterion?.comment !== undefined) {
+      setLocalComment(criterion.comment || '');
+    }
+  }, [criterion?.comment, currentCriterionIndex]);
+  
+  // Sync local feedback label when rubric changes
+  useEffect(() => {
+    if (currentRubric?.feedbackLabel !== undefined) {
+      setLocalFeedbackLabel(currentRubric.feedbackLabel || '');
+    }
+  }, [currentRubric?.feedbackLabel]);
+
+  // Debounced save function to avoid expensive localStorage writes on every keystroke
+  const debouncedSaveRubricForSubmission = useCallback((assignmentId, submissionId) => {
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+    saveTimeoutRef.current = setTimeout(() => {
+      saveRubricForSubmissionRef.current(assignmentId, submissionId);
+      saveTimeoutRef.current = null;
+    }, 500); // 500ms debounce - saves after user stops typing for half a second
+  }, []);
+
+  // Sync rubric with selected submission
+  useEffect(() => {
+    if (!selectedSubmission || !selectedAssignment || availableRubrics.length === 0) {
+      return;
+    }
+
+    const submissionId = String(selectedSubmission.user_id || selectedSubmission.id);
+    const previousSubmissionId = previousSubmissionRef.current 
+      ? String(previousSubmissionRef.current.user_id || previousSubmissionRef.current.id)
+      : null;
+
+    // Only reload if submission changed
+    if (submissionId === previousSubmissionId) {
+      return;
+    }
+
+    previousSubmissionRef.current = selectedSubmission;
+
+    // Use the first available rubric (or current rubric if it exists)
+    const baseRubric = currentRubric || availableRubrics[0];
+    if (baseRubric) {
+      loadRubricForSubmission(selectedAssignment.id, submissionId, baseRubric);
+    }
+  }, [selectedSubmission?.user_id, selectedSubmission?.id, selectedAssignment?.id, availableRubrics.length]);
+
+  // Save rubric state when it changes (debounced to avoid expensive writes on every keystroke)
+  // Use a ref to track if we've already scheduled a save to prevent multiple debounced calls
+  useEffect(() => {
+    if (!currentRubric || !selectedSubmission || !selectedAssignment) return;
+    
+    const submissionId = String(selectedSubmission.user_id || selectedSubmission.id);
+    const assignmentId = selectedAssignment.id;
+    const saveKey = `${assignmentId}-${submissionId}`;
+    
+    // Only schedule a save if:
+    // 1. This is a different submission (need to save the new one), OR
+    // 2. We haven't scheduled a save yet (timeout was cleared or never set)
+    const lastSaveKey = lastSavedRubricRef.current?.saveKey;
+    const hasPendingSave = saveTimeoutRef.current !== null;
+    
+    if (saveKey !== lastSaveKey || !hasPendingSave) {
+      lastSavedRubricRef.current = { saveKey };
+      debouncedSaveRubricForSubmission(assignmentId, submissionId);
+    }
+    
+    // Cleanup timeout on unmount or when dependencies change
+    return () => {
+      // Don't clear timeout here - let the debounce complete
+      // Only clear on unmount or submission change
+      if (saveKey !== lastSavedRubricRef.current?.saveKey) {
+        if (saveTimeoutRef.current) {
+          clearTimeout(saveTimeoutRef.current);
+          saveTimeoutRef.current = null;
+        }
+      }
+    };
+  }, [currentRubric, selectedSubmission?.user_id, selectedAssignment?.id, debouncedSaveRubricForSubmission]);
 
   const currentTotalPossible = useMemo(
     () => calculatePossiblePoints(currentRubric?.criteria || []),
@@ -105,6 +222,7 @@ const RubricDisplay = () => {
   const handleLevelSelect = (levelIndex) => {
     if (!currentRubric) return;
     selectLevel(currentCriterionIndex, levelIndex);
+    // No need to call saveRubricForSubmission here - the useEffect will handle it (debounced)
     // Auto-advance to next criterion after selection
     if (autoAdvance) {
       setTimeout(() => {
@@ -117,7 +235,30 @@ const RubricDisplay = () => {
 
   const handleCommentChange = (e) => {
     if (!currentRubric) return;
-    updateComment(currentCriterionIndex, e.target.value);
+    const value = e.target.value;
+    // Update local state immediately for responsive input
+    setLocalComment(value);
+    
+    // Debounce store update to avoid blocking the input
+    if (commentSyncTimeoutRef.current) {
+      clearTimeout(commentSyncTimeoutRef.current);
+    }
+    commentSyncTimeoutRef.current = setTimeout(() => {
+      updateComment(currentCriterionIndex, value);
+      commentSyncTimeoutRef.current = null;
+    }, 300); // 300ms debounce - faster than save debounce
+  };
+  
+  const handleCommentBlur = () => {
+    setCommentFocused(false);
+    // Sync to store immediately on blur
+    if (commentSyncTimeoutRef.current) {
+      clearTimeout(commentSyncTimeoutRef.current);
+      commentSyncTimeoutRef.current = null;
+    }
+    if (currentRubric && localComment !== (criterion?.comment || '')) {
+      updateComment(currentCriterionIndex, localComment);
+    }
   };
 
   const handleOpenAddLevelDialog = () => {
@@ -213,10 +354,15 @@ const RubricDisplay = () => {
 
   const handleDraftCriterionChange = (index, field) => (event) => {
     const value = event.target.value;
+    // Update local state immediately - no need for startTransition since this is local state
     setDraftCriteria((prev) => {
-      const updated = cloneCriteria(prev);
-      if (!updated[index]) return prev;
-      updated[index][field] = value;
+      // Optimize: only clone the specific criterion being changed, not all criteria
+      if (!prev[index]) return prev;
+      const updated = [...prev];
+      updated[index] = {
+        ...updated[index],
+        [field]: value,
+      };
       return updated;
     });
   };
@@ -231,6 +377,8 @@ const RubricDisplay = () => {
         levels: [],
         selectedLevel: null,
         comment: '',
+        totalPoints: null,
+        useCustomTotalPoints: false,
       },
     ]);
   };
@@ -245,6 +393,8 @@ const RubricDisplay = () => {
         levels: [],
         selectedLevel: null,
         comment: '',
+        totalPoints: null,
+        useCustomTotalPoints: false,
       });
       return updated;
     });
@@ -293,17 +443,18 @@ const RubricDisplay = () => {
 
   const handleLevelFieldChange = (criterionIndex, levelIndex, field) => (event) => {
     const value = event.target.value;
+    // Update local state immediately - no need for startTransition since this is local state
     setEditingLevels((prev) => {
+      // Optimize: only clone the specific level being changed, not all levels
       const cloned = { ...prev };
-      const targetLevels = cloneLevels(cloned[criterionIndex] || cloneLevels(draftCriteria[criterionIndex]?.levels || []));
+      const existingLevels = cloned[criterionIndex] || (draftCriteria[criterionIndex]?.levels || []).map(l => ({ ...l }));
+      const targetLevels = [...existingLevels];
       if (!targetLevels[levelIndex]) {
         targetLevels[levelIndex] = { name: '', description: '', points: 0 };
-      }
-      if (field === 'points') {
-        targetLevels[levelIndex][field] = value;
       } else {
-        targetLevels[levelIndex][field] = value;
+        targetLevels[levelIndex] = { ...targetLevels[levelIndex] };
       }
+      targetLevels[levelIndex][field] = value;
       cloned[criterionIndex] = targetLevels;
       return cloned;
     });
@@ -353,6 +504,19 @@ const RubricDisplay = () => {
       const updated = cloneCriteria(prev);
       if (!updated[index]) return prev;
       const newLevels = sanitizeLevels(editingLevels[index] || []);
+      // Only update totalPoints if useCustomTotalPoints is true AND totalPoints is not already set
+      // If user has explicitly set a value, preserve it
+      if (updated[index].useCustomTotalPoints === true) {
+        // Only auto-update if totalPoints is not already set (null or undefined)
+        if (updated[index].totalPoints === null || updated[index].totalPoints === undefined) {
+          // Not set yet, initialize with max level points
+          const totalPoints = newLevels.length > 0 
+            ? Math.max(...newLevels.map(l => Number(l.points) || 0))
+            : 0;
+          updated[index].totalPoints = totalPoints;
+        }
+        // If totalPoints is already set, preserve the user's custom value - don't auto-update
+      }
       updated[index] = {
         ...updated[index],
         levels: newLevels,
@@ -432,62 +596,106 @@ const RubricDisplay = () => {
   // All hooks must be called unconditionally - disable when no rubric
   const hasRubric = !!currentRubric;
   const canUseHotkeys = hasRubric && !commentFocused && !levelDialogOpen;
+  const hotkeys = useHotkeyConfig();
 
-  // Keyboard shortcuts (1-9 for levels) - combined into single hook
+  // Keyboard shortcuts (1-9 for levels) - individual hooks for each level
   useHotkeys(
-    '1,2,3,4,5,6,7,8,9',
-    (keyboardEvent, hotkeysEvent) => {
-      if (canUseHotkeys && criterion) {
-        const levelIndex = parseInt(hotkeysEvent.keys[0]) - 1;
-        if (criterion.levels?.[levelIndex]) {
-          handleLevelSelect(levelIndex);
-        }
+    hotkeys.selectLevel1,
+    () => {
+      if (canUseHotkeys && criterion && criterion.levels?.[0]) {
+        handleLevelSelect(0);
       }
     },
     { enabled: canUseHotkeys },
-    [currentCriterionIndex, commentFocused, criterion, canUseHotkeys]
+    [currentCriterionIndex, commentFocused, criterion, canUseHotkeys, hotkeys.selectLevel1]
   );
-
-  // Navigation hotkeys
   useHotkeys(
-    'n, right',
-    (event) => {
-      if (event?.key === 'ArrowRight') {
-        event.preventDefault();
+    hotkeys.selectLevel2,
+    () => {
+      if (canUseHotkeys && criterion && criterion.levels?.[1]) {
+        handleLevelSelect(1);
       }
-      if (canUseHotkeys) goToNextCriterion();
     },
     { enabled: canUseHotkeys },
-    [commentFocused, canUseHotkeys]
+    [currentCriterionIndex, commentFocused, criterion, canUseHotkeys, hotkeys.selectLevel2]
   );
-
   useHotkeys(
-    'p, left',
-    (event) => {
-      if (event?.key === 'ArrowLeft') {
-        event.preventDefault();
+    hotkeys.selectLevel3,
+    () => {
+      if (canUseHotkeys && criterion && criterion.levels?.[2]) {
+        handleLevelSelect(2);
       }
-      if (canUseHotkeys) goToPreviousCriterion();
     },
     { enabled: canUseHotkeys },
-    [commentFocused, canUseHotkeys]
+    [currentCriterionIndex, commentFocused, criterion, canUseHotkeys, hotkeys.selectLevel3]
   );
-
   useHotkeys(
-    'space',
-    (event) => {
-      event.preventDefault();
-      if (!autoAdvance && canUseHotkeys) {
-        goToNextCriterion();
+    hotkeys.selectLevel4,
+    () => {
+      if (canUseHotkeys && criterion && criterion.levels?.[3]) {
+        handleLevelSelect(3);
       }
     },
-    { enabled: !autoAdvance && canUseHotkeys },
-    [autoAdvance, canUseHotkeys]
+    { enabled: canUseHotkeys },
+    [currentCriterionIndex, commentFocused, criterion, canUseHotkeys, hotkeys.selectLevel4]
   );
+  useHotkeys(
+    hotkeys.selectLevel5,
+    () => {
+      if (canUseHotkeys && criterion && criterion.levels?.[4]) {
+        handleLevelSelect(4);
+      }
+    },
+    { enabled: canUseHotkeys },
+    [currentCriterionIndex, commentFocused, criterion, canUseHotkeys, hotkeys.selectLevel5]
+  );
+  useHotkeys(
+    hotkeys.selectLevel6,
+    () => {
+      if (canUseHotkeys && criterion && criterion.levels?.[5]) {
+        handleLevelSelect(5);
+      }
+    },
+    { enabled: canUseHotkeys },
+    [currentCriterionIndex, commentFocused, criterion, canUseHotkeys, hotkeys.selectLevel6]
+  );
+  useHotkeys(
+    hotkeys.selectLevel7,
+    () => {
+      if (canUseHotkeys && criterion && criterion.levels?.[6]) {
+        handleLevelSelect(6);
+      }
+    },
+    { enabled: canUseHotkeys },
+    [currentCriterionIndex, commentFocused, criterion, canUseHotkeys, hotkeys.selectLevel7]
+  );
+  useHotkeys(
+    hotkeys.selectLevel8,
+    () => {
+      if (canUseHotkeys && criterion && criterion.levels?.[7]) {
+        handleLevelSelect(7);
+      }
+    },
+    { enabled: canUseHotkeys },
+    [currentCriterionIndex, commentFocused, criterion, canUseHotkeys, hotkeys.selectLevel8]
+  );
+  useHotkeys(
+    hotkeys.selectLevel9,
+    () => {
+      if (canUseHotkeys && criterion && criterion.levels?.[8]) {
+        handleLevelSelect(8);
+      }
+    },
+    { enabled: canUseHotkeys },
+    [currentCriterionIndex, commentFocused, criterion, canUseHotkeys, hotkeys.selectLevel9]
+  );
+
+  // Note: Navigation hotkeys (N/P/arrows/space) are now handled in App.jsx
+  // so they work even when the rubric is collapsed
 
   // Focus comment hotkey
   useHotkeys(
-    'c',
+    hotkeys.focusComment,
     (keyboardEvent) => {
       if (hasRubric && !commentFocused && !levelDialogOpen) {
         keyboardEvent.preventDefault();
@@ -495,12 +703,12 @@ const RubricDisplay = () => {
       }
     },
     { enabled: hasRubric && !commentFocused && !levelDialogOpen, preventDefault: true },
-    [commentFocused, hasRubric, levelDialogOpen]
+    [commentFocused, hasRubric, levelDialogOpen, hotkeys.focusComment]
   );
 
   // Escape to unfocus inputs
   useHotkeys(
-    'escape',
+    hotkeys.unfocusComment,
     (event) => {
       event.preventDefault();
       const activeEl = document.activeElement;
@@ -512,7 +720,7 @@ const RubricDisplay = () => {
       }
     },
     { enableOnFormTags: true },
-    [commentFocused]
+    [commentFocused, hotkeys.unfocusComment]
   );
 
   // Early return AFTER all hooks
@@ -567,8 +775,43 @@ const RubricDisplay = () => {
         {currentCriterionIndex === 0 && (
           <TextField
             label="Student Name (optional)"
-            value={currentRubric.feedbackLabel || ''}
-            onChange={(e) => updateFeedbackLabel(e.target.value)}
+            value={localFeedbackLabel}
+            onChange={(e) => {
+              const value = e.target.value;
+              // Update local state immediately for responsive input
+              setLocalFeedbackLabel(value);
+              
+              // Debounce store update to avoid blocking the input
+              if (feedbackLabelTimeoutRef.current) {
+                clearTimeout(feedbackLabelTimeoutRef.current);
+              }
+              feedbackLabelTimeoutRef.current = setTimeout(() => {
+                const store = useRubricStore.getState();
+                if (store.currentRubric) {
+                  useRubricStore.setState({ 
+                    currentRubric: { ...store.currentRubric, feedbackLabel: value } 
+                  });
+                  store.saveSession();
+                  store.persistCurrentRubric();
+                }
+                feedbackLabelTimeoutRef.current = null;
+              }, 300); // 300ms debounce
+            }}
+            onBlur={() => {
+              // Sync to store immediately on blur
+              if (feedbackLabelTimeoutRef.current) {
+                clearTimeout(feedbackLabelTimeoutRef.current);
+                feedbackLabelTimeoutRef.current = null;
+              }
+              const store = useRubricStore.getState();
+              if (store.currentRubric && localFeedbackLabel !== (store.currentRubric.feedbackLabel || '')) {
+                useRubricStore.setState({ 
+                  currentRubric: { ...store.currentRubric, feedbackLabel: localFeedbackLabel } 
+                });
+                store.saveSession();
+                store.persistCurrentRubric();
+              }
+            }}
             size="small"
             fullWidth
             sx={{ mb: 2 }}
@@ -644,10 +887,8 @@ const RubricDisplay = () => {
                         <Typography
                           variant="body2"
                           sx={{
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
                             flex: 1,
+                            wordBreak: 'break-word',
                           }}
                         >
                           {renderTextWithLatex(
@@ -702,10 +943,10 @@ const RubricDisplay = () => {
             multiline
             rows={2}
             label="Additional Comment (Press C to focus)"
-            value={criterion.comment}
+            value={localComment}
             onChange={handleCommentChange}
             onFocus={() => setCommentFocused(true)}
-            onBlur={() => setCommentFocused(false)}
+            onBlur={handleCommentBlur}
             inputRef={commentRef}
             placeholder="Optional feedback for this criterion..."
           />
@@ -767,6 +1008,9 @@ const RubricDisplay = () => {
       <Dialog
         open={levelDialogOpen}
         onClose={handleCloseLevelDialog}
+        PaperProps={{
+          sx: { zIndex: 1400 }
+        }}
         fullWidth
         maxWidth="sm"
       >
@@ -852,6 +1096,9 @@ const RubricDisplay = () => {
       <Dialog
         open={criteriaDialogOpen}
         onClose={handleCloseCriteriaDialog}
+        PaperProps={{
+          sx: { zIndex: 1400 }
+        }}
         fullWidth
         maxWidth="md"
       >
@@ -985,6 +1232,65 @@ const RubricDisplay = () => {
                         sx={{ mt: 0.2 }}
                         fullWidth
                       />
+                      <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 0.2 }}>
+                        <FormControlLabel
+                          control={
+                            <Checkbox
+                              checked={crit.useCustomTotalPoints === true}
+                              onChange={(e) => {
+                                setDraftCriteria((prev) => {
+                                  const updated = cloneCriteria(prev);
+                                  if (!updated[index]) return prev;
+                                  updated[index].useCustomTotalPoints = e.target.checked;
+                                  // If unchecking, set totalPoints to null to use max points
+                                  if (!e.target.checked) {
+                                    updated[index].totalPoints = null;
+                                  } else {
+                                    // If checking, initialize with max points if not set
+                                    if (updated[index].totalPoints === null || updated[index].totalPoints === undefined) {
+                                      const maxPoints = updated[index].levels?.length > 0 
+                                        ? Math.max(...updated[index].levels.map(l => Number(l.points) || 0))
+                                        : 0;
+                                      updated[index].totalPoints = maxPoints;
+                                    }
+                                  }
+                                  return updated;
+                                });
+                              }}
+                              size="small"
+                            />
+                          }
+                          label="Set points"
+                          sx={{ mr: 0 }}
+                        />
+                        <TextField
+                          label="Total Points for This Criterion"
+                          type="number"
+                          value={crit.useCustomTotalPoints && crit.totalPoints !== undefined && crit.totalPoints !== null 
+                            ? crit.totalPoints 
+                            : (crit.levels?.length > 0 ? Math.max(...crit.levels.map(l => Number(l.points) || 0)) : 0)}
+                          onChange={(e) => {
+                            const value = e.target.value === '' ? 0 : Number(e.target.value);
+                            setDraftCriteria((prev) => {
+                              const updated = cloneCriteria(prev);
+                              if (!updated[index]) return prev;
+                              updated[index].totalPoints = value;
+                              updated[index].useCustomTotalPoints = true; // Auto-check when user edits
+                              return updated;
+                            });
+                          }}
+                          size="small"
+                          inputProps={{ 
+                            min: 0, 
+                            step: 0.01,
+                          }}
+                          helperText={crit.useCustomTotalPoints 
+                            ? "Set to 0 for extra credit (points awarded but not counted in total)"
+                            : "Using max points from levels"}
+                          disabled={!crit.useCustomTotalPoints}
+                          sx={{ flex: 1 }}
+                        />
+                      </Stack>
                       <Box>
                         <Button
                           variant="text"
